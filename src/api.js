@@ -1,4 +1,4 @@
-const B = import.meta.env.VITE_API || `${window.location.protocol}//${window.location.hostname}:4000`;
+const B = import.meta.env.VITE_API || 'https://chat-backend-m43q.onrender.com';
 // JWT lives in sessionStorage only; messages are held in memory and never written to client storage.
 export const tok = () => sessionStorage.getItem('t');
 export function makeId() {
