@@ -6,7 +6,8 @@ import {
   createSendMessageEvent,
   eventType,
   markOutgoingMessagesRead,
-  mergeMessage
+  mergeMessage,
+  restoreConversation
 } from './chatEvents.js';
 
 test('normalizes long-form and legacy event names', () => {
@@ -76,4 +77,18 @@ test('opening a conversation clears its backend chat unread counter', () => {
     { chatId: 'chat-1', unreadCount: 0 },
     { chatId: 'chat-2', unreadCount: 5 }
   ]);
+});
+
+test('restores the selected conversation with its backend chat document id', () => {
+  const selected = restoreConversation(
+    [{ id: 'peer-1', displayName: 'Jamie' }],
+    [{ id: 'peer-1', chatId: 'chat-document-1' }],
+    'peer-1'
+  );
+  assert.deepEqual(selected, {
+    id: 'peer-1',
+    displayName: 'Jamie',
+    chatId: 'chat-document-1'
+  });
+  assert.equal(restoreConversation([], [], 'removed-peer'), null);
 });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'; import { api, loadMedia, makeId, tok } from './api'; import Call from './Call';
-import { clearUnreadCount, conversationKey, createSendMessageEvent, eventType, markOutgoingMessagesRead, mergeMessage, normalizeMessage } from './chatEvents';
+import { clearUnreadCount, conversationKey, createSendMessageEvent, eventType, markOutgoingMessagesRead, mergeMessage, normalizeMessage, restoreConversation } from './chatEvents';
 import { compressAndUploadImage } from './utils/media.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { glassStyle, useTheme } from './context/ThemeContext.jsx';
@@ -622,6 +622,7 @@ export function MessageThread({ act, user, list, callLogs, ws, online, lastSeen,
 
 export default function Chat({ user, setUser, logout }) {
   const [chats, setChats] = useState({ users: [], groups: [], chats: [] }), [act, setAct] = useState(null), [msgs, setMsgs] = useState({}), [online, setOnline] = useState({}), [lastSeen, setLastSeen] = useState({}), [typing, setTyping] = useState({}), [error, setError] = useState('');
+  const [chatsLoaded, setChatsLoaded] = useState(false);
   const [callLogs, setCallLogs] = useState({});
   const [q, setQ] = useState(''), [res, setRes] = useState([]), [modal, setModal] = useState(null), [call, setCall] = useState(null), [inv, setInv] = useState(null), [, setW] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(320), [themeBusy, setThemeBusy] = useState(false);
@@ -637,7 +638,7 @@ export default function Chat({ user, setUser, logout }) {
     try { return localStorage.getItem('metufy-sounds-enabled') === 'true'; } catch { return false; }
   });
   const [soundError, setSoundError] = useState('');
-  const ws = useRef(), socket = useWebSocket(), typingTimers = useRef(new Map()), msgsR = useRef(msgs), chatsR = useRef(chats);
+  const ws = useRef(), socket = useWebSocket(), typingTimers = useRef(new Map()), msgsR = useRef(msgs), chatsR = useRef(chats), restoredChat = useRef(false);
   const activeChatR = useRef(act);
   msgsR.current = msgs;
   chatsR.current = chats;
@@ -747,6 +748,7 @@ export default function Chat({ user, setUser, logout }) {
   };
   const load = () => api('/chats').then(data => {
     setChats(data);
+    setChatsLoaded(true);
     setError('');
   }).catch(e => setError(e.message));
   const loadCallLogs = conversation => {
@@ -958,6 +960,31 @@ export default function Chat({ user, setUser, logout }) {
     };
   }, []);
   useEffect(() => {
+    if (!chatsLoaded || restoredChat.current) return;
+    restoredChat.current = true;
+    let savedId;
+    try {
+      savedId = localStorage.getItem(`metufy-active-chat-${user.id}`);
+    } catch (storageError) {
+      console.warn('Could not restore the selected chat:', storageError);
+      return;
+    }
+    const conversation = restoreConversation(
+      [...chats.groups, ...chats.users],
+      chats.chats,
+      savedId
+    );
+    if (conversation) setAct(conversation);
+  }, [chatsLoaded, chats.groups, chats.users, chats.chats, user.id]);
+  useEffect(() => {
+    if (!act) return;
+    try {
+      localStorage.setItem(`metufy-active-chat-${user.id}`, act.id);
+    } catch (storageError) {
+      console.warn('Could not save the selected chat:', storageError);
+    }
+  }, [act, user.id]);
+  useEffect(() => {
     if (!act) return;
     loadCallLogs(act);
     api(`/messages/${act.id}${act.members ? `?g=${encodeURIComponent(act.id)}` : ''}`).then(r => {
@@ -1091,7 +1118,12 @@ export default function Chat({ user, setUser, logout }) {
       <div className="sidebar-section-title">{q ? 'EXACT USERNAME MATCH' : 'CHATS'}<span>{!q && list.length}</span></div>
       <div className="sidebar-conversations">
         {(q ? res : list).map(c => <div key={c.id} className={`conversation-item ${act?.id === c.id ? 'conversation-active' : ''}`}>
-          <button type="button" className="conversation-select" onClick={() => { setAct({ ...c, chatId: chatMeta.get(c.id)?.chatId }); setQ(''); }}>
+          <button type="button" className="conversation-select" onClick={() => {
+            const conversation = { ...c, chatId: chatMeta.get(c.id)?.chatId };
+            setAct(conversation);
+            try { localStorage.setItem(`metufy-active-chat-${user.id}`, conversation.id); } catch (storageError) { console.warn('Could not save the selected chat:', storageError); }
+            setQ('');
+          }}>
             <span className="conversation-avatar-wrap"><Avatar url={c.avatarUrl} label={c.name || c.displayName} className="conversation-avatar" style={{ background: ac }} />{!c.members && <i className={`conversation-online ${online[c.id] ? '' : 'conversation-offline'}`} title={online[c.id] ? 'Online' : 'Offline'} />}</span>
             <span className="conversation-info"><b>{c.name || c.displayName}</b><small>{q ? '@' + c.username : previewFor(c.id)}</small></span>
           </button>

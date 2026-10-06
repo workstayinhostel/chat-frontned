@@ -50,3 +50,11 @@ export function clearUnreadCount(chats, chatId) {
     ? { ...chat, unreadCount: 0 }
     : chat);
 }
+
+export function restoreConversation(conversations, chats, conversationId) {
+  if (!conversationId) return null;
+  const conversation = conversations.find(item => item.id === conversationId);
+  if (!conversation) return null;
+  const metadata = chats.find(item => item.id === conversationId);
+  return { ...conversation, chatId: metadata?.chatId };
+}
