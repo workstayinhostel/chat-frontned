@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
-  Camera, CameraOff, MessageCircle, Mic, MicOff, MonitorUp, MoreHorizontal,
-  PhoneOff, PictureInPicture2, Settings2, SwitchCamera
+  Camera, CameraOff, Expand, MessageCircle, Mic, MicOff, MonitorUp, MoreHorizontal,
+  PhoneOff, Scan, Settings2, SwitchCamera
 } from 'lucide-react';
 
 function DeviceMenu({ video, devices, selectedDevices, onSelectDevice }) {
@@ -30,14 +30,15 @@ export default function CallControls({
   devices,
   selectedDevices,
   canShareScreen,
+  videoFit,
   onMute,
   onCamera,
   onScreenShare,
   onSwitchCamera,
+  onToggleVideoFit,
   onChat,
   chatOpen,
   onSelectDevice,
-  onMinimize,
   onEnd
 }) {
   const [devicesOpen, setDevicesOpen] = useState(false);
@@ -56,7 +57,7 @@ export default function CallControls({
         <span className="call-dock-icon">{cameraOff ? <CameraOff /> : <Camera />}</span><small>{cameraOff ? 'Camera on' : 'Camera off'}</small>
       </button>
       <button type="button" className={`call-dock-button ${sharingScreen ? 'call-dock-selected' : ''}`}
-        onClick={onScreenShare} disabled={!canShareScreen && !sharingScreen}
+        onClick={onScreenShare} disabled={!canShareScreen && !sharingScreen} data-call-option="share"
         aria-label={sharingScreen ? 'Stop screen sharing' : 'Share screen'}
         title={canShareScreen ? sharingScreen ? 'Stop screen sharing' : 'Share screen' : 'Screen sharing is not available in this browser'}>
         <span className="call-dock-icon"><MonitorUp /></span><small>{sharingScreen ? 'Stop share' : 'Share'}</small>
@@ -64,6 +65,12 @@ export default function CallControls({
       <button type="button" className="call-dock-button call-dock-switch-camera" onClick={onSwitchCamera}
         aria-label="Switch front or rear camera" title="Switch front or rear camera">
         <span className="call-dock-icon"><SwitchCamera /></span><small>Flip camera</small>
+      </button>
+      <button type="button" className="call-dock-button call-fit-video" onClick={onToggleVideoFit}
+        aria-label={videoFit === 'fit' ? 'Fill video frame' : 'Fit full video frame'}
+        title={videoFit === 'fit' ? 'Fill video frame' : 'Fit full video frame'}>
+        <span className="call-dock-icon">{videoFit === 'fit' ? <Expand /> : <Scan />}</span>
+        <small>{videoFit === 'fit' ? 'Fill' : 'Fit'}</small>
       </button>
     </>}
     <div className="call-extra-controls">
@@ -81,6 +88,10 @@ export default function CallControls({
         {devicesOpen && deviceMenu}
       </div>
     </div>
+    <button type="button" className={`call-dock-button call-mobile-chat ${chatOpen ? 'call-dock-selected' : ''}`}
+      onClick={onChat} aria-label={chatOpen ? 'Close in-call chat' : 'Open in-call chat'}>
+      <span className="call-dock-icon"><MessageCircle /></span><small>Chat</small>
+    </button>
     <div className="call-mobile-more">
       <button type="button" className={`call-dock-button ${moreOpen ? 'call-dock-selected' : ''}`}
         onClick={() => setMoreOpen(open => !open)} aria-expanded={moreOpen}
@@ -88,14 +99,17 @@ export default function CallControls({
         <span className="call-dock-icon"><MoreHorizontal /></span><small>More</small>
       </button>
       {moreOpen && <div className="call-mobile-more-menu">
-        {video && <button type="button" className="call-dock-button" onClick={() => { onSwitchCamera(); setMoreOpen(false); }}
-          aria-label="Switch front or rear camera">
-          <span className="call-dock-icon"><SwitchCamera /></span><small>Switch camera</small>
-        </button>}
-        <button type="button" className={`call-dock-button ${chatOpen ? 'call-dock-selected' : ''}`}
-          onClick={() => { onChat(); setMoreOpen(false); }} aria-label={chatOpen ? 'Close in-call chat' : 'Open in-call chat'}>
-          <span className="call-dock-icon"><MessageCircle /></span><small>Chat</small>
-        </button>
+        {video && <>
+          <button type="button" className="call-dock-button" onClick={() => { onScreenShare(); setMoreOpen(false); }}
+            data-call-option="share"
+            disabled={!canShareScreen && !sharingScreen} aria-label={sharingScreen ? 'Stop screen sharing' : 'Share screen'}>
+            <span className="call-dock-icon"><MonitorUp /></span><small>{sharingScreen ? 'Stop share' : 'Share screen'}</small>
+          </button>
+          <button type="button" className="call-dock-button call-mobile-fit" onClick={() => { onToggleVideoFit(); setMoreOpen(false); }}
+                aria-label={videoFit === 'fit' ? 'Fill video frame' : 'Fit full video frame'}>
+            <span className="call-dock-icon">{videoFit === 'fit' ? <Expand /> : <Scan />}</span><small>{videoFit === 'fit' ? 'Fill video' : 'Fit video'}</small>
+          </button>
+        </>}
         <div className="call-device-control">
           <button type="button" className={`call-dock-button ${devicesOpen ? 'call-dock-selected' : ''}`}
             onClick={() => setDevicesOpen(open => !open)} aria-expanded={devicesOpen} aria-label="Select call devices">
@@ -105,9 +119,6 @@ export default function CallControls({
         </div>
       </div>}
     </div>
-    <button type="button" className="call-dock-button" onClick={onMinimize} aria-label="Minimize call" title="Minimize call">
-      <span className="call-dock-icon"><PictureInPicture2 /></span><small>Minimize</small>
-    </button>
     <button type="button" className="call-dock-end" onClick={onEnd} aria-label="End call" title="End call">
       <span className="call-dock-icon"><PhoneOff /></span><small>End</small>
     </button>

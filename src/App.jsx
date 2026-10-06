@@ -25,6 +25,28 @@ export default function App() {
   };
   useEffect(() => { loadUser(); }, []);
   useEffect(() => {
+    const viewport = window.visualViewport;
+    const updateViewport = () => {
+      const height = viewport?.height || window.innerHeight;
+      const top = viewport?.offsetTop || 0;
+      document.documentElement.style.setProperty('--app-viewport-height', `${height}px`);
+      document.documentElement.style.setProperty('--app-viewport-top', `${top}px`);
+    };
+    updateViewport();
+    viewport?.addEventListener('resize', updateViewport);
+    viewport?.addEventListener('scroll', updateViewport);
+    window.addEventListener('resize', updateViewport);
+    window.addEventListener('orientationchange', updateViewport);
+    return () => {
+      viewport?.removeEventListener('resize', updateViewport);
+      viewport?.removeEventListener('scroll', updateViewport);
+      window.removeEventListener('resize', updateViewport);
+      window.removeEventListener('orientationchange', updateViewport);
+      document.documentElement.style.removeProperty('--app-viewport-height');
+      document.documentElement.style.removeProperty('--app-viewport-top');
+    };
+  }, []);
+  useEffect(() => {
     const expire = () => {
       sessionStorage.clear();
       setUser(null);

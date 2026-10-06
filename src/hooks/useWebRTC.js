@@ -5,27 +5,29 @@ const CALL_EVENTS = new Set(['call-invite', 'call-join', 'call-leave', 'call-dec
 const MAX_CALL_JOIN_RETRIES = 4;
 
 export function isCallSignalingError(event, room) {
-  return event?.t === 'error' &&
+  return (event?.t === 'error' || event?.type === 'error') &&
     (!event.room || event.room === room) &&
     (!event.eventType || CALL_EVENTS.has(event.eventType));
 }
 
 export function shouldRetryCallJoin(event, room) {
-  return event?.t === 'error' &&
+  return (event?.t === 'error' || event?.type === 'error') &&
     event.error === 'Call invite required' &&
     (!event.room || event.room === room) &&
     (!event.eventType || event.eventType === 'call-join');
 }
 
-export function useWebRTC({ ws, room, localStream, onEnd }) {
+export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
   const peers = useRef(new Map());
   const pendingIce = useRef(new Map());
   const disconnectTimers = useRef(new Map());
   const joinRetryTimer = useRef(null);
   const joinAttempts = useRef(0);
+  const pageExit = useRef(false);
   const displayStream = useRef(null);
   const videoSenders = useRef(new Map());
   const onEndRef = useRef(onEnd);
+  const onCallJoinFailureRef = useRef(onCallJoinFailure);
   const audioContext = useRef(null);
   const meterFrames = useRef(new Map());
   const [streams, setStreams] = useState({});
@@ -41,6 +43,7 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
   const [canShareScreen] = useState(() => Boolean(navigator.mediaDevices?.getDisplayMedia));
   const [deviceError, setDeviceError] = useState('');
   onEndRef.current = onEnd;
+  onCallJoinFailureRef.current = onCallJoinFailure;
 
   const sendSignal = useCallback((peerId, signal) => {
     if (!ws.send({ type: 'WEBRTC_SIGNAL', to: peerId, room, signal })) {
@@ -122,12 +125,17 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
       return undefined;
     }
     let live = true;
+    const markPageExit = () => { pageExit.current = true; };
+    const restorePage = () => { pageExit.current = false; };
+    window.addEventListener('pagehide', markPageExit);
+    window.addEventListener('pageshow', restorePage);
     const handleEvent = async event => {
-      if (event.t === 'error') {
+      if (event.t === 'error' || event.type === 'error') {
         if (shouldRetryCallJoin(event, room)) {
           if (joinAttempts.current >= MAX_CALL_JOIN_RETRIES) {
             setCallStatus('Call could not connect');
             setCallError('Could not join the call. Please end the call and try again.');
+            onCallJoinFailureRef.current?.();
             return;
           }
           const delay = 200 * (2 ** joinAttempts.current);
@@ -197,8 +205,10 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
       live = false;
       clearTimeout(joinRetryTimer.current);
       joinRetryTimer.current = null;
+      window.removeEventListener('pagehide', markPageExit);
+      window.removeEventListener('pageshow', restorePage);
       unsubscribe();
-      ws.send({ t: 'call-leave', room });
+      if (!pageExit.current) ws.send({ t: 'call-leave', room });
       for (const peerId of peers.current.keys()) closePeer(peerId);
       displayStream.current?.getTracks().forEach(track => track.stop());
       displayStream.current = null;
@@ -358,40 +368,46 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
       const currentTrack = localStream?.getVideoTracks()[0];
       if (!currentTrack) throw new Error('No active camera is available to switch.');
       if (displayStream.current) throw new Error('Stop screen sharing before switching cameras.');
-      const facingMode = currentTrack.getSettings().facingMode;
-      const nextFacingMode = facingMode === 'environment' ? 'user' : 'environment';
-      const replacementStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: nextFacingMode } },
-        audio: false
-      });
-      let replacement = replacementStream.getVideoTracks()[0];
-      if (!replacement) throw new Error('The other camera did not provide a video track.');
       const allDevices = await navigator.mediaDevices.enumerateDevices();
       const cameras = allDevices.filter(device => device.kind === 'videoinput');
       const currentDeviceId = currentTrack.getSettings().deviceId;
-      if (currentDeviceId && replacement.getSettings().deviceId === currentDeviceId && cameras.length > 1) {
-        replacement.stop();
-        replacementStream.getTracks().filter(track => track !== replacement).forEach(track => track.stop());
+      let replacementStream;
+      if (cameras.length > 1) {
         const currentIndex = cameras.findIndex(device => device.deviceId === currentDeviceId);
-        const nextCamera = cameras[(currentIndex + 1) % cameras.length];
-        const fallbackStream = await navigator.mediaDevices.getUserMedia({
+        const nextCamera = cameras[(currentIndex + 1 + cameras.length) % cameras.length];
+        replacementStream = await navigator.mediaDevices.getUserMedia({
           video: { deviceId: { exact: nextCamera.deviceId } },
           audio: false
         });
-        replacement = fallbackStream.getVideoTracks()[0];
-        if (!replacement) throw new Error('The selected camera did not provide a video track.');
+      } else {
+        const nextFacingMode = currentTrack.getSettings().facingMode === 'environment' ? 'user' : 'environment';
+        replacementStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: nextFacingMode } },
+          audio: false
+        });
+      }
+      const replacement = replacementStream.getVideoTracks()[0];
+      if (!replacement) {
+        replacementStream.getTracks().forEach(track => track.stop());
+        throw new Error('The selected camera did not provide a video track.');
       }
       replacement.enabled = !cameraOff;
-      await replaceVideoTrack(replacement);
-      localStream.removeTrack(currentTrack);
-      currentTrack.stop();
-      localStream.addTrack(replacement);
-      const deviceId = replacement.getSettings().deviceId || '';
-      setSelectedDevices(current => ({ ...current, videoinput: deviceId }));
-      setDevices(current => ({
-        ...current,
-        videoinput: allDevices.filter(device => device.kind === 'videoinput')
-      }));
+      try {
+        await replaceVideoTrack(replacement);
+        localStream.removeTrack(currentTrack);
+        currentTrack.stop();
+        localStream.addTrack(replacement);
+        const deviceId = replacement.getSettings().deviceId || '';
+        setSelectedDevices(current => ({ ...current, videoinput: deviceId }));
+        const refreshedDevices = await navigator.mediaDevices.enumerateDevices();
+        setDevices(current => ({
+          ...current,
+          videoinput: refreshedDevices.filter(device => device.kind === 'videoinput')
+        }));
+      } catch (error) {
+        replacementStream.getTracks().forEach(track => track.stop());
+        throw error;
+      }
     } catch (error) {
       setDeviceError(`Could not switch camera: ${error.message}`);
     }

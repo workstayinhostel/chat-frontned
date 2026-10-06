@@ -580,6 +580,16 @@ button:disabled { cursor: wait; opacity: .65; }
 .sound-enable-error { flex-basis: 100%; color: #b83343; }
 .sound-enable-prompt > button { min-height: 34px; padding: 7px 11px; border: 0; border-radius: 8px; background: #5268d7; color: white; font-size: 10px; font-weight: 650; }
 .sound-enable-prompt > .sound-enable-dismiss { border: 1px solid var(--line); background: transparent; color: var(--muted); }
+.call-notification-prompt { position: fixed; z-index: 36; right: 18px; bottom: max(18px, env(safe-area-inset-bottom)); display: flex; width: min(430px, calc(100vw - 36px)); flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 12px 38px rgba(18,28,48,.2); color: var(--text); }
+.call-notification-prompt > div { display: grid; min-width: 180px; flex: 1; gap: 4px; }
+.call-notification-prompt b { font-size: 12px; }
+.call-notification-prompt small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.call-notification-prompt button { min-height: 34px; padding: 7px 11px; border: 0; border-radius: 8px; background: #5268d7; color: white; font-size: 10px; font-weight: 650; }
+.call-notification-prompt .call-notification-dismiss { border: 1px solid var(--line); background: transparent; color: var(--muted); }
+.call-notification-prompt + .sound-enable-prompt { bottom: max(112px, calc(env(safe-area-inset-bottom) + 94px)); }
+.sound-enable-prompt:has(+ .call-notification-prompt) { bottom: max(112px, calc(env(safe-area-inset-bottom) + 94px)); }
+.call-reconnect-notice { display: flex; max-width: min(440px, 92%); align-items: center; gap: 10px; align-self: center; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--muted); font-size: 10px; line-height: 1.4; }
+.call-reconnect-notice time { flex: 0 0 auto; font-size: 9px; opacity: .8; }
 .sound-enable-compact { padding: 8px; border-radius: 11px; }
 .sound-enable-compact > button { min-height: 32px; }
 .incoming-call-backdrop { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom)); background: rgba(11,16,32,.64); backdrop-filter: blur(7px); }
@@ -606,7 +616,11 @@ button:disabled { cursor: wait; opacity: .65; }
   .brand-copy { margin-top: 42px; }
 }
 @media (max-width: 700px) {
+  html, body, #root { width: 100%; height: 100%; min-height: 0; }
+  body { overflow: hidden; overscroll-behavior: none; }
   .sound-enable-prompt { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; max-width: none; gap: 8px; padding: 12px; }
+  .call-notification-prompt { right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; width: auto; gap: 8px; padding: 12px; }
+  .call-notification-prompt + .sound-enable-prompt, .sound-enable-prompt:has(+ .call-notification-prompt) { bottom: max(108px, calc(env(safe-area-inset-bottom) + 92px)); }
   .sound-enable-compact { right: 12px; left: auto; }
   .sound-enable-copy { min-width: 145px; }
   .auth-page { display: block; padding: 0; background: #fff; }
@@ -618,7 +632,7 @@ button:disabled { cursor: wait; opacity: .65; }
   .auth-form-heading > .eyebrow { display: none; }
   .auth-form-heading h2 { font-size: 27px; }
   .auth-legal { position: fixed; right: 0; bottom: 0; left: 0; padding: 12px; background: white; }
-  .chat-app { height: 100vh; height: 100dvh; min-height: 0; }
+  .chat-app { height: var(--app-viewport-height, 100dvh); min-height: 0; }
   .chat-sidebar { width: min(100%, var(--sidebar-width)); max-width: none; min-width: 0; flex-basis: auto; flex: 1; }
   .sidebar-hidden-mobile { display: none; }
   .chat-welcome { display: none; }
@@ -665,7 +679,7 @@ button:disabled { cursor: wait; opacity: .65; }
   .send-button { width: 38px; height: 38px; }
   .composer-hint { display: none; }
   .sidebar-width-control { display: none; }
-  .call-overlay { padding: max(14px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+  .call-overlay { top: var(--app-viewport-top, 0px); bottom: auto; height: var(--app-viewport-height, 100dvh); padding: max(14px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
   .call-header { top: max(12px, env(safe-area-inset-top)); right: 12px; left: 12px; gap: 8px; padding: 9px 10px; }
   .call-header b { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .call-header small { max-width: 44vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -753,4 +767,60 @@ button:disabled { cursor: wait; opacity: .65; }
   .call-control-dock { gap: 0; padding-right: 5px; padding-left: 5px; }
   .call-dock-button, .call-dock-end { width: 43px; min-width: 43px; flex-basis: 43px; }
   .call-dock-icon { width: 41px; height: 41px; flex-basis: 41px; }
+}
+
+.call-video-grid-one-to-one { position: absolute; inset: 0; width: auto; height: auto; padding: 0; }
+.call-video-grid-one-to-one .call-video-remote { border: 0; border-radius: 0; background: #080d18; box-shadow: none; }
+.call-video-grid-one-to-one .call-video-remote video { min-height: 0; }
+.call-video-grid-one-to-one .call-video-self { top: 100px; right: 28px; width: min(21vw, 230px); height: min(30vh, 190px); }
+.call-video-grid-one-to-one .call-video-self video { min-height: 0; object-fit: cover; }
+.call-header { right: 26px; left: 26px; border: 0; background: linear-gradient(180deg, rgba(6,10,19,.55), transparent); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; text-shadow: 0 1px 8px rgba(0,0,0,.65); }
+.call-header b { color: #fff; }
+.call-header small { color: rgba(245,248,255,.83); }
+.call-header-icon { width: 44px; height: 44px; margin-left: auto; border-radius: 50%; background: rgba(15,21,35,.55); box-shadow: 0 4px 18px rgba(0,0,0,.23); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.call-video-grid-audio { display: grid; }
+.call-video-grid-audio .call-video-tile { border-color: rgba(255,255,255,.13); background: radial-gradient(ellipse at center, rgba(66,82,124,.75), rgba(16,24,42,.92) 70%); }
+.call-video-grid-audio .call-video-placeholder { z-index: 1; }
+.call-video-grid-audio .call-audio-placeholder { gap: 17px; }
+.call-audio-placeholder .call-avatar-orb { display: grid; width: clamp(92px, 15vw, 164px); height: clamp(92px, 15vw, 164px); place-items: center; overflow: hidden; border: 2px solid rgba(255,255,255,.38); border-radius: 50%; background: linear-gradient(145deg, #8195ff, #5368cf); box-shadow: 0 0 0 12px rgba(130,151,255,.1), 0 0 45px rgba(101,129,249,.28); color: #fff; font-size: clamp(32px, 6vw, 58px); font-weight: 650; transform: scale(var(--voice-scale, 1)); transition: transform .12s ease-out, box-shadow .12s ease-out; }
+.call-avatar-orb img { width: 100%; height: 100%; object-fit: cover; }
+.call-audio-placeholder .call-avatar-speaking { box-shadow: 0 0 0 15px rgba(96,220,177,.13), 0 0 58px rgba(77,223,171,.45); }
+.call-audio-placeholder small { max-width: 80%; color: #f5f7fc; font-size: 17px; font-weight: 600; text-align: center; text-shadow: 0 2px 8px rgba(0,0,0,.4); }
+.call-video-label { top: 14px; right: auto; bottom: auto; left: 14px; width: max-content; max-width: calc(100% - 28px); border-radius: 999px; }
+.call-dock-button, .call-dock-end { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.call-dock-button:active .call-dock-icon, .call-dock-end:active .call-dock-icon { transform: scale(.94); }
+.call-mobile-chat { display: none; }
+.call-setup-error { z-index: 80; }
+
+@media (max-width: 700px) {
+  .call-video-grid-one-to-one .call-video-remote { inset: 0; }
+  .call-video-grid-one-to-one .call-video-self { top: max(78px, calc(env(safe-area-inset-top) + 68px)); right: 12px; width: clamp(86px, 25vw, 126px); height: clamp(122px, 36vw, 174px); min-height: 0; border-radius: 17px; }
+  .call-video-grid-one-to-one .call-video-self video { min-height: 0; }
+  .call-header { top: max(10px, env(safe-area-inset-top)); right: 12px; left: 14px; width: auto; gap: 9px; padding: 8px 9px; }
+  .call-heading { flex: 1; }
+  .call-header b { max-width: calc(100vw - 115px); font-size: 14px; }
+  .call-header small { max-width: calc(100vw - 115px); font-size: 10px; }
+  .call-header-icon { width: 42px; height: 42px; flex: 0 0 42px; }
+  .call-control-dock { gap: 3px; }
+  .call-dock-switch-camera { display: flex; }
+  .call-extra-controls { display: none; }
+  .call-mobile-chat { display: flex; }
+  .call-dock-button[data-call-option="share"] { display: none; }
+  .call-fit-video { display: none; }
+  .call-mobile-more-menu .call-dock-button[data-call-option="share"],
+  .call-mobile-more-menu .call-dock-button.call-mobile-fit { display: flex; }
+  .call-mobile-more-menu .call-dock-button { width: 70px; min-width: 70px; flex-basis: 70px; min-height: 68px; gap: 5px; }
+  .call-mobile-more-menu .call-dock-button small { display: block; font-size: 9px; white-space: normal; text-align: center; }
+  .call-mobile-more-menu .call-dock-icon { width: 43px; height: 43px; flex-basis: 43px; }
+  .call-mobile-more-menu .call-device-control { display: block; }
+  .call-video-grid-audio { position: absolute; inset: 0; width: auto; height: auto; padding: 86px 16px max(105px, calc(env(safe-area-inset-bottom) + 95px)); grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(0, 1fr); }
+  .call-video-grid-audio .call-video-tile { min-height: 0; border: 0; background: transparent; box-shadow: none; }
+  .call-audio-placeholder .call-avatar-orb { width: clamp(104px, 34vw, 150px); height: clamp(104px, 34vw, 150px); }
+}
+
+@media (max-width: 380px) {
+  .call-control-dock { gap: 0; }
+  .call-dock-button, .call-dock-end { width: 41px; min-width: 41px; flex-basis: 41px; }
+  .call-dock-icon { width: 39px; height: 39px; flex-basis: 39px; }
+  .call-dock-icon svg { width: 18px; height: 18px; }
 }

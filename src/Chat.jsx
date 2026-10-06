@@ -24,6 +24,11 @@ const relativeLastSeen = value => {
   if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
   return new Date(value).toLocaleDateString();
 };
+const kathmanduDateTime = value => new Intl.DateTimeFormat('en-NP', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: 'Asia/Kathmandu'
+}).format(new Date(value));
 const Modal = ({ children }) => <div className="fixed inset-0 z-40 grid place-items-center bg-black/60"><div className="w-80 space-y-3 rounded-2xl bg-slate-900 p-5 text-slate-100">{children}</div></div>;
 const inp = 'w-full rounded-lg bg-slate-800 px-3 py-2 outline-none';
 
@@ -182,18 +187,14 @@ function MessageItem({ message, previous, next, currentUserId, senderLabel, dark
           const bounds = event.currentTarget.getBoundingClientRect();
           onOpenMenu(message, bounds.right, bounds.bottom, matchMedia('(pointer: coarse)').matches ? 'sheet' : 'menu');
         }}><span className="message-menu-dots">•••</span></button>}
-      {!groupedBefore && senderLabel && <small className="message-author">{senderLabel}</small>}
+      {!mine && !groupedBefore && senderLabel && <small className="message-author">{senderLabel}</small>}
       {message.deleted ? <i className="opacity-60">{message.text}</i>
         : message.kind === 'image' || message.kind === 'audio' ? <MediaAttachment id={message.text} kind={message.kind} mediaUrl={message.mediaUrl} />
-          : <><span className="whitespace-pre-wrap break-words">{message.text}</span>
-            {mine && <span className="message-inline-status">
-              {message.edited && <small>(edited)</small>}
-              {tick(message.status)}
-            </span>}
-          </>}
+          : <span className="whitespace-pre-wrap break-words">{message.text}</span>}
       {!message.deleted && <div className="message-meta">
         <time dateTime={new Date(message.at).toISOString()}>{new Date(message.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
-        {(message.kind === 'image' || message.kind === 'audio') && mine && tick(message.status)}
+        {mine && message.edited && <small>(edited)</small>}
+        {mine && tick(message.status)}
       </div>}
     </div>
   </div>;
@@ -389,7 +390,7 @@ export function ChatInput({ value, onChange, onSubmit, onUpload, onRecord, recor
   </form>;
 }
 
-export function MessageThread({ act, user, list, callLogs, ws, online, lastSeen, typing, dark, ac, onCall, onBack, onPending, onSendFailure, onMarkRead, onToggleDetails, error }) {
+export function MessageThread({ act, user, list, callLogs, callNotices = [], ws, online, lastSeen, typing, dark, ac, onCall, onBack, onPending, onSendFailure, onMarkRead, onToggleDetails, error }) {
   const [t, setT] = useState(''), [edit, setEdit] = useState(null), [rec, setRec] = useState(null), [uploads, setUploads] = useState(0), [uploadStatus, setUploadStatus] = useState(''), [mediaError, setMediaError] = useState(''), [messageMenu, setMessageMenu] = useState(null), [deleteMessage, setDeleteMessage] = useState(null), [dragging, setDragging] = useState(false), end = useRef(), lt = useRef(0), seenSent = useRef(new Set());
   const sendRead = () => {
     if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
@@ -590,15 +591,18 @@ export function MessageThread({ act, user, list, callLogs, ws, online, lastSeen,
       {error && <p role="alert" className="chat-error">{error}</p>}
       {!list.length && !callLogs.length && <div className="empty-conversation"><span>✦</span><b>This is the beginning</b><small>Send a message to start your conversation.</small></div>}
       {[...list.map(message => ({ type: 'message', at: message.at, message })),
-        ...callLogs.map(call => ({ type: 'call', at: call.at, call }))]
+        ...callLogs.map(call => ({ type: 'call', at: call.at, call })),
+        ...callNotices.filter(notice => notice.conversationId === act.id).map(notice => ({ type: 'call-notice', at: notice.at, notice }))]
         .sort((first, second) => new Date(first.at) - new Date(second.at))
         .map((item, index, timeline) => item.type === 'call'
           ? <CallLogItem key={`call:${item.call.id}`} call={item.call} currentUserId={user.id} group={g} />
-          : <MessageItem key={item.message.id} message={item.message}
+          : item.type === 'call-notice'
+            ? <div key={`call-notice:${item.notice.room}`} className="call-reconnect-notice" role="status">{item.notice.text}<time>{new Date(item.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></div>
+            : <MessageItem key={item.message.id} message={item.message}
             previous={timeline[index - 1]?.type === 'message' ? timeline[index - 1].message : null}
             next={timeline[index + 1]?.type === 'message' ? timeline[index + 1].message : null}
             currentUserId={user.id}
-            senderLabel={`${item.message.from === user.id ? 'You' : who(item.message.from) || name} · @${usernameOf(item.message.from) || 'user'}`}
+            senderLabel={`@${usernameOf(item.message.from) || 'user'}`}
             dark={dark} accent={ac} onOpenMenu={openMessageMenu} />)}
       <div ref={end} />
     </div>
@@ -626,6 +630,7 @@ export default function Chat({ user, setUser, logout }) {
   const [chats, setChats] = useState({ users: [], groups: [], chats: [] }), [act, setAct] = useState(null), [msgs, setMsgs] = useState({}), [online, setOnline] = useState({}), [lastSeen, setLastSeen] = useState({}), [typing, setTyping] = useState({}), [error, setError] = useState('');
   const [chatsLoaded, setChatsLoaded] = useState(false);
   const [callLogs, setCallLogs] = useState({});
+  const [callNotices, setCallNotices] = useState([]);
   const [q, setQ] = useState(''), [res, setRes] = useState([]), [modal, setModal] = useState(null), [call, setCall] = useState(null), [inv, setInv] = useState(null), [, setW] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(320), [themeBusy, setThemeBusy] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -634,12 +639,23 @@ export default function Chat({ user, setUser, logout }) {
     try { return JSON.parse(localStorage.getItem(`metufy-pinned-${user.id}`) || '[]'); } catch { return []; }
   });
   const [callSetupError, setCallSetupError] = useState('');
+  const callInviteNoticeShown = useRef(false), callRestoreStarted = useRef(false), missedCallsChecked = useRef(false);
   const soundElements = useRef(null), soundPending = useRef(null), ringingSoundRef = useRef(null), soundReadyRef = useRef(false), incomingCallRef = useRef(inv), activeCallRef = useRef(call), answeredCallRef = useRef(null);
-  const [soundReady, setSoundReady] = useState(false);
-  const [soundPromptDismissed, setSoundPromptDismissed] = useState(() => {
+  const [soundReady, setSoundReady] = useState(() => {
     try { return localStorage.getItem('metufy-sounds-enabled') === 'true'; } catch { return false; }
   });
+  const [soundPromptDismissed, setSoundPromptDismissed] = useState(() => {
+    try {
+      return localStorage.getItem('metufy-sounds-enabled') === 'true' ||
+        localStorage.getItem('metufy-sounds-prompt-dismissed') === 'true';
+    } catch { return false; }
+  });
   const [soundError, setSoundError] = useState('');
+  const [notificationPermission, setNotificationPermission] = useState(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
+  const [notificationPromptDismissed, setNotificationPromptDismissed] = useState(() => {
+    try { return localStorage.getItem('metufy-notification-prompt-dismissed') === 'true'; } catch { return false; }
+  });
   const ws = useRef(), socket = useWebSocket(), typingTimers = useRef(new Map()), msgsR = useRef(msgs), chatsR = useRef(chats), restoredChat = useRef(false);
   const activeChatR = useRef(act);
   msgsR.current = msgs;
@@ -658,6 +674,99 @@ export default function Chat({ user, setUser, logout }) {
     audio.pause();
     audio.currentTime = 0;
     audio.loop = false;
+  };
+  const saveSoundChoice = dismissed => {
+    try {
+      localStorage.setItem('metufy-sounds-enabled', 'true');
+      if (dismissed) localStorage.setItem('metufy-sounds-prompt-dismissed', 'true');
+    } catch (storageError) {
+      console.warn('Could not save sound preference:', storageError);
+    }
+  };
+  const showCallJoinNotice = () => {
+    let alreadyShown = callInviteNoticeShown.current;
+    try {
+      alreadyShown = alreadyShown || localStorage.getItem('metufy-call-invite-notice-shown') === 'true';
+      if (!alreadyShown) localStorage.setItem('metufy-call-invite-notice-shown', 'true');
+    } catch (storageError) {
+      console.warn('Could not remember call notification state:', storageError);
+    }
+    callInviteNoticeShown.current = true;
+    if (!alreadyShown) setCallSetupError('Could not connect this call. Please end it and try again.');
+  };
+  const saveCallRecovery = activeCall => {
+    try {
+      sessionStorage.setItem('metufy-active-call', JSON.stringify({
+        room: activeCall.room,
+        video: activeCall.video,
+        name: activeCall.name,
+        chatId: activeCall.chatId,
+        participants: activeCall.participants,
+        participantAvatars: activeCall.participantAvatars,
+        savedAt: Date.now()
+      }));
+    } catch (storageError) {
+      console.warn('Could not save call recovery state:', storageError);
+    }
+  };
+  const clearCallRecovery = room => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem('metufy-active-call') || 'null');
+      if (!room || saved?.room === room) sessionStorage.removeItem('metufy-active-call');
+    } catch (storageError) {
+      console.warn('Could not clear call recovery state:', storageError);
+    }
+  };
+  const notifyMissedCall = missedCall => {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const callId = String(missedCall.id || missedCall.room || '');
+    if (!callId) return;
+    const storageKey = `metufy-notified-missed-calls-${user.id}`;
+    let notified = [];
+    try {
+      notified = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      if (!Array.isArray(notified)) notified = [];
+      if (notified.includes(callId)) return;
+    } catch (storageError) {
+      console.warn('Could not remember missed call notification:', storageError);
+    }
+    const caller = missedCall.username ? `@${missedCall.username}` : missedCall.fromName || 'Metufy contact';
+    try {
+      const notification = new Notification(`Missed call from ${caller}`, {
+        body: `${missedCall.video ? 'Video call' : 'Voice call'} · ${kathmanduDateTime(missedCall.at || Date.now())} (Kathmandu, Nepal)`,
+        tag: `metufy-missed-call-${callId}`
+      });
+      try {
+        localStorage.setItem(storageKey, JSON.stringify([...notified, callId].slice(-100)));
+      } catch (storageError) {
+        console.warn('Could not remember missed call notification:', storageError);
+      }
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    } catch (notificationError) {
+      console.warn('Could not show missed call notification:', notificationError);
+      setError('A missed call notification could not be displayed by this browser.');
+    }
+  };
+  const requestCallNotifications = async () => {
+    if (typeof Notification === 'undefined') {
+      setNotificationPromptDismissed(true);
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission !== 'default') {
+        setNotificationPromptDismissed(true);
+        try { localStorage.setItem('metufy-notification-prompt-dismissed', 'true'); } catch (storageError) {
+          console.warn('Could not save notification preference:', storageError);
+        }
+      }
+    } catch (notificationError) {
+      setError(`Could not request call notifications: ${notificationError.message}`);
+    }
   };
   const playSound = (name, loop = false) => {
     const isRingtone = name === 'callIncoming' || name === 'callOutgoing';
@@ -694,7 +803,41 @@ export default function Chat({ user, setUser, logout }) {
     const requestedSound = typeof soundName === 'string' ? soundName : undefined;
     if (requestedSound === 'callIncoming' || requestedSound === 'callOutgoing') ringingSoundRef.current = requestedSound;
     const pending = soundPending.current;
-    const targetName = ringingSoundRef.current || pending?.name || requestedSound || 'messageSent';
+    const targetName = ringingSoundRef.current || pending?.name || requestedSound;
+    if (!targetName) {
+      setSoundError('');
+      const unlocks = Object.values(sounds).map(audio => {
+        const wasMuted = audio.muted;
+        audio.muted = true;
+        audio.loop = false;
+        audio.currentTime = 0;
+        return audio.play().then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.muted = wasMuted;
+        }).catch(error => {
+          audio.muted = wasMuted;
+          throw error;
+        });
+      });
+      Promise.allSettled(unlocks).then(results => {
+        if (results.every(result => result.status === 'rejected')) {
+          setSoundError('Browser audio will be ready after your next tap.');
+          return;
+        }
+        soundReadyRef.current = true;
+        setSoundReady(true);
+        setSoundPromptDismissed(true);
+        setSoundError('');
+        saveSoundChoice(true);
+        if (soundPending.current) {
+          const queued = soundPending.current;
+          soundPending.current = null;
+          playSound(queued.name, queued.loop);
+        }
+      });
+      return;
+    }
     const target = sounds[targetName];
     if (!target) {
       setSoundError('Audio could not be initialized. Reload Metufy and try again.');
@@ -727,14 +870,12 @@ export default function Chat({ user, setUser, logout }) {
         setSoundReady(true);
         setSoundPromptDismissed(true);
         setSoundError('');
+        saveSoundChoice(true);
         if (soundPending.current?.name === targetName) soundPending.current = null;
         else if (soundPending.current) {
           const queued = soundPending.current;
           soundPending.current = null;
           playSound(queued.name, queued.loop);
-        }
-        try { localStorage.setItem('metufy-sounds-enabled', 'true'); } catch (error) {
-          console.warn('Could not save audio preference:', error);
         }
       }).catch(error => {
         soundReadyRef.current = false;
@@ -748,6 +889,17 @@ export default function Chat({ user, setUser, logout }) {
       setSoundError(`Audio could not start: ${error.message}`);
     }
   };
+  useEffect(() => {
+    if (soundReady || !soundPromptDismissed || !soundElements.current) return undefined;
+    const unlock = () => enableSounds();
+    const options = { capture: true, once: true };
+    window.addEventListener('pointerdown', unlock, options);
+    window.addEventListener('keydown', unlock, options);
+    return () => {
+      window.removeEventListener('pointerdown', unlock, options);
+      window.removeEventListener('keydown', unlock, options);
+    };
+  }, [soundReady, soundPromptDismissed]);
   const toggleTheme = async () => {
     setThemeBusy(true);
     try {
@@ -764,6 +916,17 @@ export default function Chat({ user, setUser, logout }) {
     setChatsLoaded(true);
     setError('');
   }).catch(e => setError(e.message));
+  const loadMissedCallNotifications = () => api('/calls/missed')
+    .then(missedCalls => missedCalls.forEach(notifyMissedCall))
+    .catch(loadError => {
+      missedCallsChecked.current = false;
+      setError(`Could not check missed calls: ${loadError.message}`);
+    });
+  useEffect(() => {
+    if (notificationPermission !== 'granted' || !chatsLoaded || missedCallsChecked.current) return;
+    missedCallsChecked.current = true;
+    loadMissedCallNotifications();
+  }, [notificationPermission, chatsLoaded]);
   const loadCallLogs = conversation => {
     if (!conversation) return;
     const path = `/calls/${conversation.id}${conversation.members ? `?g=${encodeURIComponent(conversation.id)}` : ''}`;
@@ -936,7 +1099,19 @@ export default function Chat({ user, setUser, logout }) {
         if (activeCallRef.current?.room === e.room) {
           answeredCallRef.current = e.room;
           stopSound('callOutgoing');
+          setCallSetupError('');
           playSound('callReceived');
+        }
+        if (e.reconnected && e.from !== user.id) {
+          const conversationId = e.group || e.from;
+          setCallNotices(current => current.some(notice => notice.room === e.room)
+            ? current
+            : [...current.slice(-19), {
+              room: e.room,
+              conversationId,
+              at: e.at || new Date().toISOString(),
+              text: `${e.fromUsername ? `@${e.fromUsername}` : e.fromName || 'A participant'} reloaded and rejoined the call.`
+            }]);
         }
         const current = activeChatR.current;
         if (current) loadCallLogs(current);
@@ -955,17 +1130,25 @@ export default function Chat({ user, setUser, logout }) {
           activeCallRef.current = null;
           setCall(null);
         }
+        loadMissedCallNotifications();
       }
-      if (e.t === 'error') {
+      if (e.t === 'error' || e.type === 'error') {
         if (e.clientId) {
           setMsgs(s => Object.fromEntries(Object.entries(s).map(([k, items]) => [k, items.filter(m => m.clientId !== e.clientId)])));
           setError(e.error);
         } else {
-          if (['call-invite', 'call-join'].includes(e.eventType) && activeCallRef.current?.room === e.room) {
+          const errorText = typeof e.error === 'string' ? e.error : 'Request failed';
+          const callEvent = ['call-invite', 'call-join', 'call-leave', 'call-decline', 'WEBRTC_SIGNAL', 'sig'].includes(e.eventType) ||
+            errorText.toLowerCase().includes('call invite required');
+          if (errorText.toLowerCase().includes('call invite required')) {
+            // The WebRTC hook retries this transient ordering error.
+          } else if (e.eventType === 'call-invite' && activeCallRef.current?.room === e.room) {
+            stopSound('callOutgoing');
+          } else if (e.eventType === 'call-join' && activeCallRef.current?.room === e.room) {
             stopSound('callOutgoing');
           }
-          if (!['call-invite', 'call-join', 'call-leave', 'call-decline', 'WEBRTC_SIGNAL', 'sig'].includes(e.eventType)) {
-            alert(e.error);
+          if (!callEvent) {
+            setError(errorText);
           }
         }
       }
@@ -1075,14 +1258,19 @@ export default function Chat({ user, setUser, logout }) {
         chatId: act.chatId || act.id,
         participants: act.members
           ? Object.fromEntries(act.members.map(member => [member.id, member.displayName]))
-          : { [act.id]: act.displayName }
+          : { [act.id]: act.displayName },
+        participantAvatars: act.members
+          ? Object.fromEntries(act.members.filter(member => member.avatarUrl).map(member => [member.id, member.avatarUrl]))
+          : act.avatarUrl ? { [act.id]: act.avatarUrl } : {}
       };
+      saveCallRecovery(activeCall);
       activeCallRef.current = activeCall;
       answeredCallRef.current = null;
       setCall(activeCall);
       if (answeredCallRef.current !== room) playSound('callOutgoing', true);
     } catch (error) {
       stopSound('callOutgoing');
+      clearCallRecovery();
       stream?.getTracks().forEach(track => track.stop());
       setCallSetupError(error.message);
     }
@@ -1108,8 +1296,13 @@ export default function Chat({ user, setUser, logout }) {
         chatId: inv.chatId || (activeChat ? chatMeta.get(activeChat.id)?.chatId || activeChat.id : undefined),
         participants: inv.group
           ? Object.fromEntries(chats.groups.find(group => group.id === inv.group)?.members.map(member => [member.id, member.displayName]) || [])
-          : caller ? { [caller.id]: caller.displayName } : {}
+          : caller ? { [caller.id]: caller.displayName } : {},
+        participantAvatars: inv.group
+          ? Object.fromEntries(chats.groups.find(group => group.id === inv.group)?.members
+            .filter(member => member.avatarUrl).map(member => [member.id, member.avatarUrl]) || [])
+          : caller?.avatarUrl ? { [caller.id]: caller.avatarUrl } : {}
       };
+      saveCallRecovery(activeCall);
       activeCallRef.current = activeCall;
       answeredCallRef.current = null;
       incomingCallRef.current = null;
@@ -1120,6 +1313,37 @@ export default function Chat({ user, setUser, logout }) {
       if (incomingCallRef.current?.room === inv.room) playSound('callIncoming', true);
     }
   };
+  useEffect(() => {
+    if (socket.status !== 'connected' || !ws.current || call || callRestoreStarted.current) return;
+    let savedCall;
+    try {
+      savedCall = JSON.parse(sessionStorage.getItem('metufy-active-call') || 'null');
+    } catch (storageError) {
+      console.warn('Could not read call recovery state:', storageError);
+      clearCallRecovery();
+      return;
+    }
+    if (!savedCall?.room || !Number.isFinite(savedCall.savedAt) || Date.now() - savedCall.savedAt > 55_000) {
+      if (savedCall) clearCallRecovery();
+      return;
+    }
+    callRestoreStarted.current = true;
+    requestCallMedia(Boolean(savedCall.video)).then(localStream => {
+      const restoredCall = { ...savedCall, localStream };
+      activeCallRef.current = restoredCall;
+      setCall(restoredCall);
+    }).catch(restoreError => {
+      ws.current?.send({ t: 'call-decline', room: savedCall.room });
+      clearCallRecovery(savedCall.room);
+      setCallSetupError(`The previous call could not be restored and has been ended: ${restoreError.message}`);
+    });
+  }, [socket.status, call]);
+  useEffect(() => {
+    if (!call) return undefined;
+    saveCallRecovery(call);
+    const timer = setInterval(() => saveCallRecovery(call), 10_000);
+    return () => clearInterval(timer);
+  }, [call]);
   const allChats = [...chats.groups, ...chats.users];
   const list = allChats.filter(conversation => {
     if (chatFilter === 'direct') return !conversation.members;
@@ -1185,26 +1409,42 @@ export default function Chat({ user, setUser, logout }) {
         <button className="account-settings-button" onClick={() => setAccountOpen(true)}><span>⚙</span> Account <b>→</b></button>
       </div>
     </ChatList>
-    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setAccountOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => ({ ...s, [act.id]: (s[act.id] || []).filter(item => item.clientId !== clientId) })); setError(message); }} error={error} />
+    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} callNotices={callNotices} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setAccountOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => ({ ...s, [act.id]: (s[act.id] || []).filter(item => item.clientId !== clientId) })); setError(message); }} error={error} />
       : <div className="chat-welcome"><span className="welcome-mark">m</span><b>Your conversations, all together.</b><p>Search for someone by username and say hello.</p></div>}
     {accountOpen && <SettingsDrawer user={user} setUser={setUser} logout={logout} close={() => setAccountOpen(false)} activeChat={act} messages={act ? msgs[act.id] || [] : []} onProfileUpdate={load} />}
     {modal === 'group' && <NewGroup close={() => setModal(null)} done={load} />}
-    {!soundReady && !inv && !call && <aside className={`sound-enable-prompt ${soundPromptDismissed ? 'sound-enable-compact' : ''}`} role="status">
-      {!soundPromptDismissed && <div className="sound-enable-copy">
+    {!soundReady && !soundPromptDismissed && !inv && !call && <aside className="sound-enable-prompt" role="status">
+      <div className="sound-enable-copy">
         <b>Enable Metufy sounds</b>
         <span>Tap once to allow message and call audio on this device.</span>
-      </div>}
+      </div>
       {soundError && <span className="sound-enable-error" role="alert">{soundError}</span>}
       <button type="button" onClick={() => enableSounds()}>Enable sounds</button>
-      {!soundPromptDismissed && <button type="button" className="sound-enable-dismiss" onClick={() => setSoundPromptDismissed(true)}>Not now</button>}
+      <button type="button" className="sound-enable-dismiss" onClick={() => {
+        setSoundPromptDismissed(true);
+        try { localStorage.setItem('metufy-sounds-prompt-dismissed', 'true'); } catch (storageError) {
+          console.warn('Could not save sound prompt preference:', storageError);
+        }
+      }}>Not now</button>
     </aside>}
-    {callSetupError && !call && <div className="call-setup-error" role="alert"><span>{callSetupError}</span><button onClick={() => setCallSetupError('')} aria-label="Dismiss">×</button></div>}
+    {notificationPermission === 'default' && !notificationPromptDismissed && !inv && !call &&
+      <aside className="call-notification-prompt" role="status">
+        <div><b>Missed call alerts</b><small>Allow browser notifications to see missed calls while Metufy is open or when you return.</small></div>
+        <button type="button" onClick={requestCallNotifications}>Allow notifications</button>
+        <button type="button" className="call-notification-dismiss" onClick={() => {
+          setNotificationPromptDismissed(true);
+          try { localStorage.setItem('metufy-notification-prompt-dismissed', 'true'); } catch (storageError) {
+            console.warn('Could not save notification preference:', storageError);
+          }
+        }}>Not now</button>
+      </aside>}
+    {callSetupError && <div className="call-setup-error" role="alert"><span>{callSetupError}</span><button onClick={() => setCallSetupError('')} aria-label="Dismiss">×</button></div>}
     {inv && !call && <CallNotification
       caller={{ ...inv, avatarUrl: chats.users.find(contact => contact.id === inv.from)?.avatarUrl }}
       video={inv.video}
       error={callSetupError}
       soundError={soundError}
-      onEnableSound={!soundReady ? () => enableSounds('callIncoming', true) : undefined}
+      onEnableSound={!soundReady && !soundPromptDismissed ? () => enableSounds('callIncoming', true) : undefined}
       onDecline={() => {
         ws.current.send({ t: 'call-decline', room: inv.room });
         stopSound('callIncoming');
@@ -1216,11 +1456,20 @@ export default function Chat({ user, setUser, logout }) {
       onAccept={acceptCall}
     />}
     {call && <Call ws={ws.current} room={call.room} video={call.video} localStream={call.localStream}
-      user={user} name={call.name} chatId={call.chatId} participants={call.participants} onEnd={() => {
+      user={user} name={call.name} chatId={call.chatId} participants={call.participants}
+      participantAvatars={call.participantAvatars} onCallJoinFailure={() => {
+        stopSound('callOutgoing');
+        ws.current?.send({ t: 'call-decline', room: call.room });
+        clearCallRecovery(call.room);
+        activeCallRef.current = null;
+        setCall(null);
+        showCallJoinNotice();
+      }} onEnd={() => {
       stopSound('callIncoming');
       stopSound('callOutgoing');
       answeredCallRef.current = null;
       activeCallRef.current = null;
+      clearCallRecovery(call.room);
       setCall(null);
     }} />}
   </ChatLayout>;

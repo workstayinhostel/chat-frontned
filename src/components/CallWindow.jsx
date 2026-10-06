@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Headphones, Minimize2, Video, X } from 'lucide-react';
+import { Minimize2 } from 'lucide-react';
 import CallControls from './CallControls.jsx';
 import VideoGrid from './VideoGrid.jsx';
 
@@ -44,6 +44,7 @@ export default function CallWindow({ call, user, ws, onEnd, onEnableSound }) {
   const [chatOpen, setChatOpen] = useState(false);
   const [hiddenSelf, setHiddenSelf] = useState(false);
   const [flipSelf, setFlipSelf] = useState(false);
+  const [videoFit, setVideoFit] = useState('fit');
   const [bubblePosition, setBubblePosition] = useState(null);
   const [dragOrigin, setDragOrigin] = useState(null);
   const [playbackError, setPlaybackError] = useState('');
@@ -78,26 +79,28 @@ export default function CallWindow({ call, user, ws, onEnd, onEnableSound }) {
         <b>{call.name || (call.video ? 'Video call' : 'Voice call')}</b>
         <small>{controls.callStatus} · {remoteCount + 1} participant{remoteCount ? 's' : ''}</small>
       </div>
-      <span className="call-type-pill">{call.video ? <Video size={13} /> : <Headphones size={13} />}{call.video ? 'VIDEO CALL' : 'VOICE CALL'}</span>
-      <button type="button" className="call-header-icon" onClick={() => setMinimized(true)} aria-label="Minimize call"><Minimize2 /></button>
-      <button type="button" className="call-close" onClick={onEnd} aria-label="End call"><X /></button>
+      <button type="button" className="call-header-icon" onClick={() => setMinimized(true)} aria-label="Minimize call" title="Minimize call">
+        <Minimize2 />
+      </button>
     </header>
     {(controls.callError || controls.deviceError || playbackError) && <p className="call-error" role="alert">{controls.callError || controls.deviceError || playbackError}</p>}
-    <VideoGrid streams={controls.streams} localStream={controls.localPreviewStream} video={call.video}
+    <VideoGrid streams={controls.streams} localStream={controls.localPreviewStream} video={call.video} user={user}
       cameraOff={controls.cameraOff} participants={call.participants} speaking={controls.speaking}
-      levels={controls.levels} hiddenSelf={hiddenSelf} flipSelf={flipSelf}
+      participantAvatars={call.participantAvatars} levels={controls.levels} videoFit={videoFit}
+      hiddenSelf={hiddenSelf} flipSelf={flipSelf}
       onFlipSelf={() => setFlipSelf(value => !value)} onPlaybackError={setPlaybackError}
       outputDevice={controls.selectedDevices.audiooutput} />
-    <button type="button" className="call-self-toggle" onClick={() => setHiddenSelf(value => !value)}>
+    {call.video && <button type="button" className="call-self-toggle" onClick={() => setHiddenSelf(value => !value)}>
       {hiddenSelf ? 'Show self view' : 'Hide self view'}
-    </button>
+    </button>}
     {chatOpen && <InCallChat ws={ws} chatId={call.chatId} user={user} room={call.room} />}
     <CallControls muted={controls.muted} cameraOff={controls.cameraOff} sharingScreen={controls.sharingScreen}
       video={call.video} audioLevel={controls.levels.local || 0} devices={controls.devices}
-      canShareScreen={controls.canShareScreen}
+      canShareScreen={controls.canShareScreen} videoFit={videoFit}
       selectedDevices={controls.selectedDevices} onMute={controls.toggleMute} onCamera={controls.toggleCamera}
       onScreenShare={controls.toggleScreenShare} onSwitchCamera={controls.switchCamera}
+      onToggleVideoFit={() => setVideoFit(value => value === 'fit' ? 'fill' : 'fit')}
       onChat={() => setChatOpen(open => !open)} chatOpen={chatOpen}
-      onSelectDevice={controls.selectDevice} onMinimize={() => setMinimized(true)} onEnd={onEnd} />
+      onSelectDevice={controls.selectDevice} onEnd={onEnd} />
   </div>;
 }
