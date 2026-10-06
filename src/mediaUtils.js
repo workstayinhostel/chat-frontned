@@ -2,11 +2,31 @@ import { createClient } from '@supabase/supabase-js';
 import { API_BASE_URL, tok } from './api.js';
 
 export const MAX_IMAGE_BYTES = 500_000;
+const UPLOAD_REQUEST_TIMEOUT_MS = 45_000;
 const BUCKET = 'metufy';
 const supportedImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/avif']);
 const env = import.meta.env || {};
 let storageClient;
 let storageClientConfig;
+
+async function fetchWithTimeout(input, init = {}) {
+  const controller = new AbortController();
+  const propagateAbort = () => controller.abort(init.signal?.reason);
+  if (init.signal?.aborted) propagateAbort();
+  else init.signal?.addEventListener('abort', propagateAbort, { once: true });
+  const timeout = setTimeout(() => controller.abort(), UPLOAD_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted && !init.signal?.aborted) {
+      throw new Error('Upload request timed out. Check your connection and try again.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    init.signal?.removeEventListener('abort', propagateAbort);
+  }
+}
 
 export function validateImageFile(file) {
   if (!(file instanceof Blob) || !supportedImageTypes.has(file.type)) {
@@ -39,8 +59,13 @@ export async function compressImage(file) {
   let objectUrl;
   try {
     if (typeof createImageBitmap === 'function') {
-      bitmap = await createImageBitmap(file);
-    } else {
+      try {
+        bitmap = await createImageBitmap(file);
+      } catch {
+        // Fall back to the image element decoder used by browsers with partial bitmap support.
+      }
+    }
+    if (!bitmap) {
       objectUrl = URL.createObjectURL(file);
       bitmap = await new Promise((resolve, reject) => {
         const image = new Image();
@@ -56,7 +81,7 @@ export async function compressImage(file) {
     const outputMime = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/webp';
     let scale = Math.min(1, 2560 / Math.max(originalWidth, originalHeight));
 
-    for (let attempt = 0; attempt < 24; attempt += 1) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.floor(originalWidth * scale));
       canvas.height = Math.max(1, Math.floor(originalHeight * scale));
@@ -71,7 +96,7 @@ export async function compressImage(file) {
       if (highestQualityBlob.size <= MAX_IMAGE_BYTES) return highestQualityBlob;
       const lowestQualityBlob = await canvasBlob(canvas, outputMime, low);
       if (lowestQualityBlob.size <= MAX_IMAGE_BYTES) best = lowestQualityBlob;
-      for (let iteration = 0; iteration < 14; iteration += 1) {
+      for (let iteration = 0; iteration < 8; iteration += 1) {
         const quality = (low + high) / 2;
         const blob = await canvasBlob(canvas, outputMime, quality);
         if (blob.size <= MAX_IMAGE_BYTES) {
@@ -82,7 +107,7 @@ export async function compressImage(file) {
         }
       }
       if (best) return best;
-      scale *= 0.9;
+      scale *= 0.85;
     }
     throw new RangeError('Could not compress the image to 500,000 bytes or less.');
   } catch (error) {
@@ -104,7 +129,8 @@ function getStorageClient(options) {
   const config = `${url}\0${key}`;
   if (!storageClient || storageClientConfig !== config) {
     storageClient = createClient(url, key, {
-      auth: { autoRefreshToken: false, persistSession: false }
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { fetch: fetchWithTimeout }
     });
     storageClientConfig = config;
   }
@@ -127,7 +153,7 @@ async function uploadImage(file, options = {}) {
     if (token) headers.Authorization = `Bearer ${token}`;
     let response;
     try {
-      response = await fetch(`${apiBaseUrl}${path}`, {
+      response = await fetchWithTimeout(`${apiBaseUrl}${path}`, {
         method: 'POST',
         credentials: 'include',
         headers,

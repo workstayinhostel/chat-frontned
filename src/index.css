@@ -309,6 +309,8 @@ button:disabled { cursor: wait; opacity: .65; }
 .message-inline-status small { font-size: 9px; opacity: .72; }
 .message-status-tick { font-size: 11px; font-weight: 600; letter-spacing: -2px; }
 .message-status-seen { color: #55b8ff; }
+.message-status-failed { color: #ff7180; font-weight: 800; }
+.message-retry { padding: 0 2px; border: 0; background: transparent; color: inherit; font-size: 9px; text-decoration: underline; }
 .message-send-spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }
 
 .message-bubble [aria-label="seen"] { color: #c7edff; }
@@ -632,7 +634,7 @@ button:disabled { cursor: wait; opacity: .65; }
   .auth-form-heading > .eyebrow { display: none; }
   .auth-form-heading h2 { font-size: 27px; }
   .auth-legal { position: fixed; right: 0; bottom: 0; left: 0; padding: 12px; background: white; }
-  .chat-app { height: var(--app-viewport-height, 100dvh); min-height: 0; }
+  .chat-app { position: fixed; top: var(--app-viewport-top, 0px); right: 0; left: 0; height: var(--app-viewport-height, 100dvh); min-height: 0; }
   .chat-sidebar { width: min(100%, var(--sidebar-width)); max-width: none; min-width: 0; flex-basis: auto; flex: 1; }
   .sidebar-hidden-mobile { display: none; }
   .chat-welcome { display: none; }
@@ -672,7 +674,7 @@ button:disabled { cursor: wait; opacity: .65; }
   .chat-actions button span { font-size: 15px; line-height: 1.1; }
   .chat-actions button small { display: block; font-size: 8px; line-height: 1.1; }
   .chat-messages { padding: 17px 13px; }
-  .composer-wrap { padding: 6px 10px max(8px, env(safe-area-inset-bottom)); }
+  .composer-wrap { padding: 6px 10px max(8px, var(--app-composer-bottom-inset, env(safe-area-inset-bottom))); }
   .composer { min-height: 52px; gap: 5px; padding: 5px; }
   .composer input { min-height: 40px; font-size: 16px; }
   .composer-tool { width: 34px; height: 38px; }
@@ -713,7 +715,7 @@ button:disabled { cursor: wait; opacity: .65; }
   .settings-drawer { width: min(340px, 42vw); min-width: 260px; flex-basis: min(340px, 42vw); }
 }
 @media (max-width: 700px) {
-  .chat-app { position: relative; }
+  .chat-app { position: fixed; }
   .settings-drawer { position: absolute; z-index: 30; top: 0; right: 0; bottom: 0; width: min(360px, 92vw); min-width: 0; flex-basis: auto; box-shadow: -18px 0 48px rgba(5,12,28,.25); }
 }
 
@@ -737,6 +739,7 @@ button:disabled { cursor: wait; opacity: .65; }
 .call-dock-end:disabled, .call-dock-button:disabled { cursor: not-allowed; opacity: .45; }
 .call-meter { top: 12px; right: 12px; z-index: 1; }
 .call-extra-controls { display: contents; }
+.call-dock-switch-camera { display: none; }
 .call-mobile-more { display: none; }
 .call-mobile-more-menu { position: absolute; right: 0; bottom: calc(100% + 12px); display: flex; align-items: center; gap: 8px; padding: 12px; border: 1px solid rgba(255,255,255,.19); border-radius: 20px; background: rgba(18,26,43,.92); box-shadow: 0 18px 50px rgba(0,0,0,.42); backdrop-filter: blur(25px); }
 .call-mobile-more-menu .call-dock-button { width: 72px; min-width: 72px; flex-basis: 72px; }

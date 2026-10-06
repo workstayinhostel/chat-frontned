@@ -13,6 +13,8 @@ import callIncomingSound from './assets/callincomming.mp3';
 import callEndedSound from './assets/calldecline.mp3';
 const tick = status => status === 'sending'
   ? <span className="message-send-spinner" title="Sending" aria-label="Sending" />
+  : status === 'failed'
+    ? <span className="message-status-failed" title="Not sent" aria-label="Not sent">!</span>
   : status === 'sent'
     ? <span className="message-status-tick" title="Sent" aria-label="Sent">✓</span>
     : <span className={`message-status-tick ${status === 'seen' ? 'message-status-seen' : ''}`}
@@ -151,12 +153,21 @@ function MessageActions({ message, position, canEdit, dark, onEdit, onDelete, on
   </>, document.body);
 }
 
-function MessageItem({ message, previous, next, currentUserId, senderLabel, dark, accent, onOpenMenu }) {
+function MessageItem({ message, previous, next, currentUserId, senderLabel, dark, accent, onOpenMenu, onRetry, onSendFailure }) {
   const longPress = useRef(null);
+  const sendFailure = useRef(onSendFailure);
+  sendFailure.current = onSendFailure;
   const mine = message.from === currentUserId;
   const groupedBefore = previous?.from === message.from;
   const groupedAfter = next?.from === message.from;
   const canEdit = mine && message.kind === 'text' && !message.deleted && Date.now() - new Date(message.at) < 3e5;
+  useEffect(() => {
+    if (message.status !== 'sending' || !message.clientId) return undefined;
+    const timeout = setTimeout(() => {
+      sendFailure.current(message.clientId, 'Message was not confirmed. Check your connection and retry.');
+    }, 30_000);
+    return () => clearTimeout(timeout);
+  }, [message.status, message.clientId]);
   const clearLongPress = () => {
     clearTimeout(longPress.current);
     longPress.current = null;
@@ -195,6 +206,8 @@ function MessageItem({ message, previous, next, currentUserId, senderLabel, dark
         <time dateTime={new Date(message.at).toISOString()}>{new Date(message.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
         {mine && message.edited && <small>(edited)</small>}
         {mine && tick(message.status)}
+        {mine && message.status === 'failed' && message.clientId &&
+          <button type="button" className="message-retry" onClick={() => onRetry(message)}>Retry</button>}
       </div>}
     </div>
   </div>;
@@ -274,7 +287,7 @@ export function SettingsDrawer({ user, setUser, logout, close, activeChat, messa
           <button type="button" onClick={() => photoInput.current?.click()} disabled={photoUploading}>
             {photoUploading ? 'Uploading…' : 'Change profile photo'}
           </button>
-          <input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden
+          <input ref={photoInput} type="file" accept="image/*" hidden
             onChange={event => {
               const file = event.target.files?.[0];
               if (file) uploadPhoto(file);
@@ -371,7 +384,7 @@ export function ChatInput({ value, onChange, onSubmit, onUpload, onRecord, recor
           {['😊', '❤️', '😂', '👍', '🎉', '🙏'].map(emoji => <button key={emoji} type="button" onClick={() => appendEmoji(emoji)}>{emoji}</button>)}
         </div>}
       </div>
-      <label className="composer-tool" title="Attach a photo" aria-label="Attach a photo">📎<input type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden onChange={event => { const file = event.target.files?.[0]; if (file) onUpload(file); event.target.value = ''; }} /></label>
+      <label className="composer-tool" title="Attach a photo" aria-label="Attach a photo">📎<input type="file" accept="image/*" hidden onChange={event => { const file = event.target.files?.[0]; if (file) onUpload(file); event.target.value = ''; }} /></label>
       <textarea ref={textarea} value={value} onChange={event => onChange(event.target.value)} onInput={event => {
         event.currentTarget.style.height = 'auto';
         event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 144)}px`;
@@ -390,7 +403,7 @@ export function ChatInput({ value, onChange, onSubmit, onUpload, onRecord, recor
   </form>;
 }
 
-export function MessageThread({ act, user, list, callLogs, callNotices = [], ws, online, lastSeen, typing, dark, ac, onCall, onBack, onPending, onSendFailure, onMarkRead, onToggleDetails, error }) {
+export function MessageThread({ act, user, list, callLogs, callNotices = [], ws, online, lastSeen, typing, dark, ac, onCall, onBack, onPending, onSendFailure, onRetryMessage, onMarkRead, onToggleDetails, error }) {
   const [t, setT] = useState(''), [edit, setEdit] = useState(null), [rec, setRec] = useState(null), [uploads, setUploads] = useState(0), [uploadStatus, setUploadStatus] = useState(''), [mediaError, setMediaError] = useState(''), [messageMenu, setMessageMenu] = useState(null), [deleteMessage, setDeleteMessage] = useState(null), [dragging, setDragging] = useState(false), end = useRef(), lt = useRef(0), seenSent = useRef(new Set());
   const sendRead = () => {
     if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
@@ -507,6 +520,22 @@ export function MessageThread({ act, user, list, callLogs, callNotices = [], ws,
       onSendFailure(clientId, 'Message not sent. Check your connection and try again.');
     }
   };
+  const retrySend = message => {
+    const event = message.kind === 'audio'
+      ? { t: 'msg', clientId: message.clientId, kind: message.kind, text: message.text, ...tgt }
+      : createSendMessageEvent({
+        chatId: message.chatId || act.chatId || chatMeta.get(act.id)?.chatId || act.id,
+        clientId: message.clientId,
+        kind: message.kind,
+        content: message.text,
+        mediaUrl: message.mediaUrl
+      });
+    if (!ws.send(event)) {
+      onSendFailure(message.clientId, 'Message not sent. Check your connection and try again.');
+      return;
+    }
+    onRetryMessage(message.clientId);
+  };
   const submit = e => {
     e?.preventDefault();
     if (!t.trim()) return;
@@ -603,7 +632,8 @@ export function MessageThread({ act, user, list, callLogs, callNotices = [], ws,
             next={timeline[index + 1]?.type === 'message' ? timeline[index + 1].message : null}
             currentUserId={user.id}
             senderLabel={`@${usernameOf(item.message.from) || 'user'}`}
-            dark={dark} accent={ac} onOpenMenu={openMessageMenu} />)}
+            dark={dark} accent={ac} onOpenMenu={openMessageMenu} onRetry={retrySend}
+            onSendFailure={onSendFailure} />)}
       <div ref={end} />
     </div>
     <MessageActions message={activeMenuMessage ? { ...activeMenuMessage, currentUserId: user.id } : null}
@@ -1052,18 +1082,26 @@ export default function Chat({ user, setUser, logout }) {
         }
       }
       if (type === 'SEND_MESSAGE_ACK' || e.t === 'stored') {
-        const message = acceptMessage(type === 'SEND_MESSAGE_ACK' ? e.message : e.m, e.clientId);
-        playSound('messageSent');
-        if (e.message?.chatId) {
-          const conversationId = keyOf(message);
-          setChats(state => ({
-            ...state,
-            chats: state.chats.map(chat => chat.id === conversationId ? { ...chat, chatId: e.message.chatId } : chat)
-          }));
-          setAct(current => current?.id === conversationId
-            ? { ...current, chatId: e.message.chatId }
-            : current);
+        const acknowledged = type === 'SEND_MESSAGE_ACK' ? e.message : e.m;
+        if (acknowledged && typeof acknowledged === 'object') {
+          const message = acceptMessage(acknowledged, e.clientId);
+          if (e.message?.chatId) {
+            const conversationId = keyOf(message);
+            setChats(state => ({
+              ...state,
+              chats: state.chats.map(chat => chat.id === conversationId ? { ...chat, chatId: e.message.chatId } : chat)
+            }));
+            setAct(current => current?.id === conversationId
+              ? { ...current, chatId: e.message.chatId }
+              : current);
+          }
+        } else if (e.clientId) {
+          setMsgs(state => Object.fromEntries(Object.entries(state).map(([key, items]) => [
+            key,
+            items.map(item => item.clientId === e.clientId ? { ...item, status: 'sent' } : item)
+          ])));
         }
+        playSound('messageSent');
         load();
       }
       if (e.t === 'upd') {
@@ -1134,8 +1172,11 @@ export default function Chat({ user, setUser, logout }) {
       }
       if (e.t === 'error' || e.type === 'error') {
         if (e.clientId) {
-          setMsgs(s => Object.fromEntries(Object.entries(s).map(([k, items]) => [k, items.filter(m => m.clientId !== e.clientId)])));
-          setError(e.error);
+          setMsgs(s => Object.fromEntries(Object.entries(s).map(([k, items]) => [
+            k,
+            items.map(message => message.clientId === e.clientId ? { ...message, status: 'failed' } : message)
+          ])));
+          setError(typeof e.error === 'string' ? e.error : 'Message could not be sent.');
         } else {
           const errorText = typeof e.error === 'string' ? e.error : 'Request failed';
           const callEvent = ['call-invite', 'call-join', 'call-leave', 'call-decline', 'WEBRTC_SIGNAL', 'sig'].includes(e.eventType) ||
@@ -1409,7 +1450,7 @@ export default function Chat({ user, setUser, logout }) {
         <button className="account-settings-button" onClick={() => setAccountOpen(true)}><span>⚙</span> Account <b>→</b></button>
       </div>
     </ChatList>
-    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} callNotices={callNotices} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setAccountOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => ({ ...s, [act.id]: (s[act.id] || []).filter(item => item.clientId !== clientId) })); setError(message); }} error={error} />
+    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} callNotices={callNotices} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setAccountOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'failed' } : item)]))); setError(message); }} onRetryMessage={clientId => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'sending' } : item)]))); setError(''); }} error={error} />
       : <div className="chat-welcome"><span className="welcome-mark">m</span><b>Your conversations, all together.</b><p>Search for someone by username and say hello.</p></div>}
     {accountOpen && <SettingsDrawer user={user} setUser={setUser} logout={logout} close={() => setAccountOpen(false)} activeChat={act} messages={act ? msgs[act.id] || [] : []} onProfileUpdate={load} />}
     {modal === 'group' && <NewGroup close={() => setModal(null)} done={load} />}

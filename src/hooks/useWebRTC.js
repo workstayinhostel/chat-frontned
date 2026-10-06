@@ -17,6 +17,18 @@ export function shouldRetryCallJoin(event, room) {
     (!event.eventType || event.eventType === 'call-join');
 }
 
+export function getCameraSwitchConstraints(cameras, settings = {}) {
+  const nextFacingMode = settings.facingMode === 'environment' ? 'user' : 'environment';
+  const constraints = [{ facingMode: { exact: nextFacingMode } }];
+
+  const currentIndex = cameras.findIndex(device => device.deviceId && device.deviceId === settings.deviceId);
+  const nextCamera = currentIndex >= 0
+    ? cameras[(currentIndex + 1) % cameras.length]
+    : cameras.find(device => device.deviceId && device.deviceId !== settings.deviceId);
+  if (nextCamera?.deviceId) constraints.push({ deviceId: { exact: nextCamera.deviceId } });
+  return constraints;
+}
+
 export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
   const peers = useRef(new Map());
   const pendingIce = useRef(new Map());
@@ -370,22 +382,21 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
       if (displayStream.current) throw new Error('Stop screen sharing before switching cameras.');
       const allDevices = await navigator.mediaDevices.enumerateDevices();
       const cameras = allDevices.filter(device => device.kind === 'videoinput');
-      const currentDeviceId = currentTrack.getSettings().deviceId;
+      const constraints = getCameraSwitchConstraints(cameras, currentTrack.getSettings());
       let replacementStream;
-      if (cameras.length > 1) {
-        const currentIndex = cameras.findIndex(device => device.deviceId === currentDeviceId);
-        const nextCamera = cameras[(currentIndex + 1 + cameras.length) % cameras.length];
-        replacementStream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: nextCamera.deviceId } },
-          audio: false
-        });
-      } else {
-        const nextFacingMode = currentTrack.getSettings().facingMode === 'environment' ? 'user' : 'environment';
-        replacementStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: nextFacingMode } },
-          audio: false
-        });
+      let lastConstraintError;
+      for (const video of constraints) {
+        try {
+          replacementStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+          break;
+        } catch (error) {
+          if (!['OverconstrainedError', 'ConstraintNotSatisfiedError', 'NotFoundError', 'TypeError'].includes(error.name)) {
+            throw error;
+          }
+          lastConstraintError = error;
+        }
       }
+      if (!replacementStream) throw lastConstraintError || new Error('No alternate camera is available.');
       const replacement = replacementStream.getVideoTracks()[0];
       if (!replacement) {
         replacementStream.getTracks().forEach(track => track.stop());

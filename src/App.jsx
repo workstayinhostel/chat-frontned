@@ -26,11 +26,20 @@ export default function App() {
   useEffect(() => { loadUser(); }, []);
   useEffect(() => {
     const viewport = window.visualViewport;
+    let frame = 0;
     const updateViewport = () => {
-      const height = viewport?.height || window.innerHeight;
-      const top = viewport?.offsetTop || 0;
-      document.documentElement.style.setProperty('--app-viewport-height', `${height}px`);
-      document.documentElement.style.setProperty('--app-viewport-top', `${top}px`);
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const height = viewport?.height || window.innerHeight;
+        const top = viewport?.offsetTop || 0;
+        const keyboardOpen = window.innerHeight - height > 120;
+        document.documentElement.style.setProperty('--app-viewport-height', `${height}px`);
+        document.documentElement.style.setProperty('--app-viewport-top', `${top}px`);
+        document.documentElement.style.setProperty(
+          '--app-composer-bottom-inset',
+          keyboardOpen ? '0px' : 'env(safe-area-inset-bottom)'
+        );
+      });
     };
     updateViewport();
     viewport?.addEventListener('resize', updateViewport);
@@ -38,12 +47,14 @@ export default function App() {
     window.addEventListener('resize', updateViewport);
     window.addEventListener('orientationchange', updateViewport);
     return () => {
+      cancelAnimationFrame(frame);
       viewport?.removeEventListener('resize', updateViewport);
       viewport?.removeEventListener('scroll', updateViewport);
       window.removeEventListener('resize', updateViewport);
       window.removeEventListener('orientationchange', updateViewport);
       document.documentElement.style.removeProperty('--app-viewport-height');
       document.documentElement.style.removeProperty('--app-viewport-top');
+      document.documentElement.style.removeProperty('--app-composer-bottom-inset');
     };
   }, []);
   useEffect(() => {
