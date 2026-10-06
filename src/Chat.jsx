@@ -3,6 +3,7 @@ import { clearUnreadCount, conversationKey, createSendMessageEvent, eventType, m
 import { compressAndUploadImage } from './utils/media.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { glassStyle, useTheme } from './context/ThemeContext.jsx';
+import CallNotification from './components/CallNotification.jsx';
 import { createPortal } from 'react-dom';
 import messageSentSound from './assets/messagesent.mp3';
 import messageReceivedSound from './assets/messagecome.mp3';
@@ -494,7 +495,7 @@ export function MessageThread({ act, user, list, callLogs, ws, online, lastSeen,
     const event = kind === 'audio'
       ? { t: 'msg', clientId, kind, text, ...tgt }
       : createSendMessageEvent({
-        chatId: act.chatId || act.id,
+        chatId: act.chatId || chatMeta.get(act.id)?.chatId || act.id,
         clientId,
         kind,
         content: text,
@@ -632,7 +633,7 @@ export default function Chat({ user, setUser, logout }) {
     try { return JSON.parse(localStorage.getItem(`metufy-pinned-${user.id}`) || '[]'); } catch { return []; }
   });
   const [callSetupError, setCallSetupError] = useState('');
-  const soundElements = useRef(null), soundPending = useRef(null), soundReadyRef = useRef(false), incomingCallRef = useRef(inv), activeCallRef = useRef(call), answeredCallRef = useRef(null);
+  const soundElements = useRef(null), soundPending = useRef(null), ringingSoundRef = useRef(null), soundReadyRef = useRef(false), incomingCallRef = useRef(inv), activeCallRef = useRef(call), answeredCallRef = useRef(null);
   const [soundReady, setSoundReady] = useState(false);
   const [soundPromptDismissed, setSoundPromptDismissed] = useState(() => {
     try { return localStorage.getItem('metufy-sounds-enabled') === 'true'; } catch { return false; }
@@ -650,6 +651,7 @@ export default function Chat({ user, setUser, logout }) {
   const { theme: glassTheme } = useTheme();
   const stopSound = name => {
     const audio = soundElements.current?.[name];
+    if (ringingSoundRef.current === name) ringingSoundRef.current = null;
     if (soundPending.current?.name === name) soundPending.current = null;
     if (!audio) return;
     audio.pause();
@@ -657,6 +659,13 @@ export default function Chat({ user, setUser, logout }) {
     audio.loop = false;
   };
   const playSound = (name, loop = false) => {
+    const isRingtone = name === 'callIncoming' || name === 'callOutgoing';
+    if (isRingtone) {
+      stopSound(name === 'callIncoming' ? 'callOutgoing' : 'callIncoming');
+      ringingSoundRef.current = name;
+    } else if (ringingSoundRef.current) {
+      return;
+    }
     const audio = soundElements.current?.[name];
     if (!audio) return;
     audio.pause();
@@ -679,9 +688,10 @@ export default function Chat({ user, setUser, logout }) {
       setSoundError('Audio is still loading. Please try again in a moment.');
       return;
     }
-    const pending = soundPending.current;
     const requestedSound = typeof soundName === 'string' ? soundName : undefined;
-    const targetName = pending?.name || requestedSound || 'messageSent';
+    if (requestedSound === 'callIncoming' || requestedSound === 'callOutgoing') ringingSoundRef.current = requestedSound;
+    const pending = soundPending.current;
+    const targetName = ringingSoundRef.current || pending?.name || requestedSound || 'messageSent';
     const target = sounds[targetName];
     if (!target) {
       setSoundError('Audio could not be initialized. Reload Metufy and try again.');
@@ -706,7 +716,7 @@ export default function Chat({ user, setUser, logout }) {
 
       target.muted = false;
       target.volume = pending || requestedSound ? 1 : 0.2;
-      target.loop = pending?.loop ?? loop;
+      target.loop = targetName === ringingSoundRef.current || pending?.loop === true || loop;
       target.currentTime = 0;
       const playback = target.play();
       playback.then(() => {
@@ -947,7 +957,14 @@ export default function Chat({ user, setUser, logout }) {
         if (e.clientId) {
           setMsgs(s => Object.fromEntries(Object.entries(s).map(([k, items]) => [k, items.filter(m => m.clientId !== e.clientId)])));
           setError(e.error);
-        } else alert(e.error);
+        } else {
+          if (['call-invite', 'call-join'].includes(e.eventType) && activeCallRef.current?.room === e.room) {
+            stopSound('callOutgoing');
+          }
+          if (!['call-invite', 'call-join', 'call-leave', 'call-decline', 'WEBRTC_SIGNAL', 'sig'].includes(e.eventType)) {
+            alert(e.error);
+          }
+        }
       }
     });
     document.addEventListener('visibilitychange', retryPending);
@@ -1047,12 +1064,22 @@ export default function Chat({ user, setUser, logout }) {
         ? { t: 'call-invite', group: act.id, room, video, name: act.name }
         : { t: 'call-invite', to: [act.id], room, video, name: act.displayName };
       if (!ws.current.send(invite)) throw new Error('Reconnecting to Metufy. Please try the call again.');
-      const activeCall = { room, video, localStream: stream };
+      const activeCall = {
+        room,
+        video,
+        localStream: stream,
+        name: act.members ? act.name : act.displayName,
+        chatId: act.chatId || act.id,
+        participants: act.members
+          ? Object.fromEntries(act.members.map(member => [member.id, member.displayName]))
+          : { [act.id]: act.displayName }
+      };
       activeCallRef.current = activeCall;
       answeredCallRef.current = null;
       setCall(activeCall);
       if (answeredCallRef.current !== room) playSound('callOutgoing', true);
     } catch (error) {
+      stopSound('callOutgoing');
       stream?.getTracks().forEach(track => track.stop());
       setCallSetupError(error.message);
     }
@@ -1064,7 +1091,22 @@ export default function Chat({ user, setUser, logout }) {
     try {
       const localStream = await requestCallMedia(inv.video);
       stopSound('callIncoming');
-      const activeCall = { room: inv.room, video: inv.video, localStream };
+      const caller = chats.users.find(contact => contact.id === inv.from);
+      const activeChat = inv.group
+        ? chats.groups.find(group => group.id === inv.group)
+        : act?.id === inv.from
+          ? act
+          : chats.users.find(contact => contact.id === inv.from);
+      const activeCall = {
+        room: inv.room,
+        video: inv.video,
+        localStream,
+        name: inv.name || inv.fromName,
+        chatId: inv.chatId || (activeChat ? chatMeta.get(activeChat.id)?.chatId || activeChat.id : undefined),
+        participants: inv.group
+          ? Object.fromEntries(chats.groups.find(group => group.id === inv.group)?.members.map(member => [member.id, member.displayName]) || [])
+          : caller ? { [caller.id]: caller.displayName } : {}
+      };
       activeCallRef.current = activeCall;
       answeredCallRef.current = null;
       incomingCallRef.current = null;
@@ -1153,22 +1195,24 @@ export default function Chat({ user, setUser, logout }) {
       {!soundPromptDismissed && <button type="button" className="sound-enable-dismiss" onClick={() => setSoundPromptDismissed(true)}>Not now</button>}
     </aside>}
     {callSetupError && !call && <div className="call-setup-error" role="alert"><span>{callSetupError}</span><button onClick={() => setCallSetupError('')} aria-label="Dismiss">×</button></div>}
-    {inv && !call && <div className="incoming-call-backdrop">
-      <section className="incoming-call-card" role="dialog" aria-modal="true" aria-labelledby="incoming-call-title">
-        <span className="incoming-call-avatar">{inv.fromName?.[0]?.toUpperCase() || '?'}</span>
-        <span className="incoming-call-kicker">INCOMING {inv.video ? 'VIDEO' : 'VOICE'} CALL</span>
-        <h2 id="incoming-call-title">{inv.fromName || 'Metufy contact'}</h2>
-        <p>{inv.video ? 'Video call · microphone and camera access' : 'Voice call · microphone access'}</p>
-        {!soundReady && <button className="incoming-sound-enable" onClick={() => enableSounds('callIncoming', true)}>Enable call sounds</button>}
-        {soundError && <p className="incoming-call-error" role="alert">{soundError}</p>}
-        {callSetupError && <p className="incoming-call-error" role="alert">{callSetupError}</p>}
-        <div className="incoming-call-actions">
-          <button className="incoming-decline" onClick={() => { ws.current.send({ t: 'call-decline', room: inv.room }); stopSound('callIncoming'); playSound('callEnded'); incomingCallRef.current = null; setInv(null); setCallSetupError(''); }}><span>×</span><small>Decline</small></button>
-          <button className="incoming-accept" onClick={acceptCall}><span>✓</span><small>Accept</small></button>
-        </div>
-      </section>
-    </div>}
-    {call && <Call ws={ws.current} room={call.room} video={call.video} localStream={call.localStream} onEnd={() => {
+    {inv && !call && <CallNotification
+      caller={{ ...inv, avatarUrl: chats.users.find(contact => contact.id === inv.from)?.avatarUrl }}
+      video={inv.video}
+      error={callSetupError}
+      soundError={soundError}
+      onEnableSound={!soundReady ? () => enableSounds('callIncoming', true) : undefined}
+      onDecline={() => {
+        ws.current.send({ t: 'call-decline', room: inv.room });
+        stopSound('callIncoming');
+        playSound('callEnded');
+        incomingCallRef.current = null;
+        setInv(null);
+        setCallSetupError('');
+      }}
+      onAccept={acceptCall}
+    />}
+    {call && <Call ws={ws.current} room={call.room} video={call.video} localStream={call.localStream}
+      user={user} name={call.name} chatId={call.chatId} participants={call.participants} onEnd={() => {
       stopSound('callIncoming');
       stopSound('callOutgoing');
       answeredCallRef.current = null;
