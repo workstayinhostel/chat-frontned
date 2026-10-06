@@ -37,6 +37,11 @@ export function getCameraSwitchConstraints(cameras, settings = {}) {
   return constraints;
 }
 
+export function prioritizeH264Codecs(codecs) {
+  const h264 = codecs.filter(codec => codec.mimeType?.toLowerCase() === 'video/h264');
+  return [...h264, ...codecs.filter(codec => codec.mimeType?.toLowerCase() !== 'video/h264')];
+}
+
 export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
   const peers = useRef(new Map());
   const pendingIce = useRef(new Map());
@@ -44,6 +49,7 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
   const joinRetryTimer = useRef(null);
   const joinAttempts = useRef(0);
   const pageExit = useRef(false);
+  const reconnecting = useRef(false);
   const displayStream = useRef(null);
   const videoSenders = useRef(new Map());
   const onEndRef = useRef(onEnd);
@@ -77,7 +83,23 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
     const connection = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     for (const track of localStream?.getTracks() || []) {
       const sender = connection.addTrack(track, localStream);
-      if (track.kind === 'video') videoSenders.current.set(peerId, sender);
+      if (track.kind === 'video') {
+        videoSenders.current.set(peerId, sender);
+        const transceiver = typeof connection.getTransceivers === 'function'
+          ? connection.getTransceivers().find(item => item.sender === sender)
+          : null;
+        const codecs = globalThis.RTCRtpSender?.getCapabilities?.('video')?.codecs;
+        if (transceiver?.setCodecPreferences && codecs?.length) {
+          const preferredCodecs = prioritizeH264Codecs(codecs);
+          if (preferredCodecs.some(codec => codec.mimeType?.toLowerCase() === 'video/h264')) {
+            try {
+              transceiver.setCodecPreferences(preferredCodecs);
+            } catch (error) {
+              console.warn('Could not set preferred WebRTC video codecs; using browser defaults:', error);
+            }
+          }
+        }
+      }
     }
     connection.onicecandidate = event => {
       if (event.candidate) sendSignal(peerId, { ice: event.candidate });
@@ -152,6 +174,26 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
     window.addEventListener('pagehide', markPageExit);
     window.addEventListener('pageshow', restorePage);
     const handleEvent = async event => {
+      if (event.t === 'reconnecting') {
+        reconnecting.current = true;
+        setCallStatus('Reconnecting…');
+        return;
+      }
+      if (event.t === 'ready') {
+        if (reconnecting.current) {
+          reconnecting.current = false;
+          joinAttempts.current = 0;
+          clearTimeout(joinRetryTimer.current);
+          if (!ws.send({ t: 'call-join', room })) {
+            setCallStatus('Call could not connect');
+            setCallError('Reconnecting to Metufy. Please try the call again.');
+          } else {
+            setCallStatus('Joining call…');
+            setCallError('');
+          }
+        }
+        return;
+      }
       if (event.t === 'error' || event.type === 'error') {
         if (shouldRetryCallJoin(event, room)) {
           if (joinAttempts.current >= MAX_CALL_JOIN_RETRIES) {

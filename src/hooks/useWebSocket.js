@@ -41,13 +41,28 @@ export function useWebSocket(handlers = {}) {
   useEffect(() => {
     const connection = connect();
     connectionRef.current = connection;
+    let lastResumeReconnect = 0;
     const unsubscribe = connection.sub(event => {
       if (event.t === 'ready') setStatus('connected');
       else if (event.t === 'reconnecting') setStatus('reconnecting');
       else if (event.type === 'error' || event.t === 'error') setStatus('error');
       routeWebSocketEvent(event, handlersRef.current);
     });
+    const reconnectOnResume = () => {
+      const now = Date.now();
+      if (document.visibilityState === 'visible' && now - lastResumeReconnect >= 1500) {
+        lastResumeReconnect = now;
+        connection.reconnect();
+      }
+    };
+    const reconnectFromPageShow = event => {
+      if (event.persisted) reconnectOnResume();
+    };
+    document.addEventListener('visibilitychange', reconnectOnResume);
+    window.addEventListener('pageshow', reconnectFromPageShow);
     return () => {
+      document.removeEventListener('visibilitychange', reconnectOnResume);
+      window.removeEventListener('pageshow', reconnectFromPageShow);
       unsubscribe();
       connectionRef.current = null;
       connection.close();

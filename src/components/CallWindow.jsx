@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Minimize2 } from 'lucide-react';
 import CallControls from './CallControls.jsx';
 import VideoGrid from './VideoGrid.jsx';
@@ -48,6 +48,7 @@ export default function CallWindow({ call, user, ws, onEnd, onEnableSound }) {
   const [bubblePosition, setBubblePosition] = useState(null);
   const [dragOrigin, setDragOrigin] = useState(null);
   const [playbackError, setPlaybackError] = useState('');
+  const handlePlaybackError = useCallback(message => setPlaybackError(message), []);
   const bubbleMoved = useRef(false);
   const controls = call.media;
   const remoteCount = Object.keys(controls.streams).length;
@@ -88,7 +89,7 @@ export default function CallWindow({ call, user, ws, onEnd, onEnableSound }) {
       cameraOff={controls.cameraOff} participants={call.participants} speaking={controls.speaking}
       participantAvatars={call.participantAvatars} levels={controls.levels} videoFit={videoFit}
       hiddenSelf={hiddenSelf} flipSelf={flipSelf}
-      onFlipSelf={() => setFlipSelf(value => !value)} onPlaybackError={setPlaybackError}
+      onFlipSelf={() => setFlipSelf(value => !value)} onPlaybackError={handlePlaybackError}
       outputDevice={controls.selectedDevices.audiooutput} />
     {call.video && <button type="button" className="call-self-toggle" onClick={() => setHiddenSelf(value => !value)}>
       {hiddenSelf ? 'Show self view' : 'Hide self view'}

@@ -1,23 +1,39 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, VideoOff } from 'lucide-react';
 
 function VideoTile({ stream, label, avatarUrl, local, videoEnabled, cameraOff, speaking, audioLevel, flipSelf, onFlipSelf, onPlaybackError, outputDevice, videoFit, showVideoLabel }) {
   const video = useRef(null);
+  const [showTapToPlay, setShowTapToPlay] = useState(false);
   const videoTrack = stream?.getVideoTracks().find(track => track.readyState === 'live');
   useEffect(() => {
     const element = video.current;
     if (!element || !stream) return;
+    let live = true;
+    setShowTapToPlay(false);
     element.srcObject = stream;
     if (outputDevice && typeof element.setSinkId === 'function') {
       element.setSinkId(outputDevice).catch(error => onPlaybackError(`Could not select speaker: ${error.message}`));
     }
-    element.play().catch(error => onPlaybackError(`Video playback needs permission: ${error.message}`));
+    element.play().catch(error => {
+      if (!live) return;
+      setShowTapToPlay(true);
+      onPlaybackError(`Video playback needs permission: ${error.message}`);
+    });
+    return () => { live = false; };
   }, [onPlaybackError, outputDevice, stream]);
 
   return <article className={`call-video-tile ${local ? 'call-video-self' : 'call-video-remote'} ${speaking ? 'call-speaker-active' : ''} ${videoEnabled ? '' : 'call-audio-tile'}`}>
     {(!cameraOff || !videoEnabled) && <video ref={video} autoPlay playsInline muted={local}
       className={`${flipSelf && local ? 'call-video-flipped' : ''} ${!videoEnabled ? 'call-audio-stream' : ''}`}
       style={{ objectFit: local || videoFit === 'fill' ? 'cover' : 'contain' }} />}
+    {showTapToPlay && videoEnabled && <button type="button" className="call-video-tap-to-play"
+      onClick={() => {
+        const element = video.current;
+        if (!element) return;
+        element.play().then(() => setShowTapToPlay(false)).catch(error =>
+          onPlaybackError(`Video playback is still blocked: ${error.message}`)
+        );
+      }}>{local ? 'Tap to start camera preview' : 'Tap to play video'}</button>}
     {(!videoEnabled || cameraOff || !videoTrack) &&
       <div className={`call-video-placeholder ${!videoEnabled ? 'call-audio-placeholder' : ''}`}>
         <span className={`call-avatar-orb ${speaking ? 'call-avatar-speaking' : ''}`}

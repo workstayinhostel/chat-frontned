@@ -53,22 +53,43 @@ export function connect() {
   const canQueue = event => event.type === 'SEND_MESSAGE' || event.t === 'msg';
   const open = () => {
     if (dead) return;
+    clearTimeout(reconnectTimer);
     const wsUrl = new URL(`${API_BASE_URL}/ws`);
     wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(wsUrl);
-    ws.onopen = () => {
+    const socket = new WebSocket(wsUrl);
+    ws = socket;
+    socket.onopen = () => {
+      if (ws !== socket) return;
       reconnectDelay = 1000;
       while (queuedMessages.length && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(queuedMessages.shift()));
+        try {
+          ws.send(JSON.stringify(queuedMessages[0]));
+          queuedMessages.shift();
+        } catch (error) {
+          console.warn('Could not flush a queued WebSocket message:', error);
+          socket.close();
+          break;
+        }
       }
-      subs.forEach(f => f({ t: 'ready' }));
+      if (socket.readyState === WebSocket.OPEN) subs.forEach(f => f({ t: 'ready' }));
     };
-    ws.onmessage = e => {
-      const event = JSON.parse(e.data);
+    socket.onmessage = e => {
+      if (ws !== socket) return;
+      let event;
+      try {
+        event = JSON.parse(e.data);
+      } catch (error) {
+        console.error('Could not process a WebSocket message:', error);
+        subs.forEach(f => f({ t: 'error', error: 'Received an invalid response from the chat server.' }));
+        return;
+      }
       subs.forEach(f => f(event));
     };
-    ws.onclose = () => {
-      if (dead) return;
+    socket.onerror = () => {
+      if (ws === socket) subs.forEach(listener => listener({ t: 'reconnecting' }));
+    };
+    socket.onclose = () => {
+      if (dead || ws !== socket) return;
       subs.forEach(listener => listener({ t: 'reconnecting' }));
       reconnectTimer = setTimeout(open, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
@@ -78,28 +99,47 @@ export function connect() {
   return {
     send: o => {
       if (dead) return false;
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws?.readyState === WebSocket.OPEN) {
         try {
           ws.send(JSON.stringify(o));
           return true;
         } catch (error) {
           if (!canQueue(o)) throw error;
           queuedMessages.push(o);
+          ws.close();
           return true;
         }
       }
       if (canQueue(o)) {
         queuedMessages.push(o);
+        if (!ws || ws.readyState === WebSocket.CLOSED) open();
         return true;
       }
       return false;
+    },
+    reconnect: () => {
+      if (dead) return false;
+      clearTimeout(reconnectTimer);
+      subs.forEach(listener => listener({ t: 'reconnecting' }));
+      if (ws && ws.readyState !== WebSocket.CLOSED) {
+        const previous = ws;
+        ws = null;
+        previous.onclose = null;
+        previous.onerror = null;
+        previous.onmessage = null;
+        previous.onopen = null;
+        previous.close();
+      }
+      reconnectDelay = 1000;
+      open();
+      return true;
     },
     sub: f => (subs.add(f), () => subs.delete(f)),
     close: () => {
       dead = true;
       clearTimeout(reconnectTimer);
       queuedMessages.length = 0;
-      ws.close();
+      ws?.close();
     }
   };
 }

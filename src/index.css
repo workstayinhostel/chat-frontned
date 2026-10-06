@@ -730,6 +730,7 @@ button:disabled { cursor: wait; opacity: .65; }
 }
 
 .call-video-grid-one-to-one { position: relative; display: block; }
+.call-video-tap-to-play { position: absolute; z-index: 4; top: 50%; left: 50%; padding: 11px 16px; transform: translate(-50%, -50%); border: 1px solid rgba(255,255,255,.3); border-radius: 999px; background: rgba(12,18,31,.82); color: #fff; font-size: 12px; }
 .call-video-grid-one-to-one .call-video-remote { position: absolute; inset: 0; min-height: 0; }
 .call-video-grid-one-to-one .call-video-self { position: absolute; z-index: 2; top: 96px; right: 22px; width: min(22vw, 230px); height: min(28vh, 170px); min-height: 100px; border-color: rgba(255,255,255,.24); box-shadow: 0 14px 40px rgba(0,0,0,.42); }
 .call-control-dock { gap: 12px; padding: 13px 18px; }
