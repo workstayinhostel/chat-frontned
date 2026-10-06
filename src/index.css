@@ -125,7 +125,9 @@ button:disabled { cursor: wait; opacity: .65; }
   letter-spacing: -.055em;
   line-height: 1.08;
 }
+.brand-heart { color: #e56a83; }
 .brand-copy p { max-width: 335px; margin: 0; color: #798399; font-size: 14px; line-height: 1.8; }
+.auth-mobile-promise { display: none; }
 .chat-preview {
   position: relative;
   z-index: 1;
@@ -289,6 +291,7 @@ button:disabled { cursor: wait; opacity: .65; }
 .chat-contact b, .chat-contact small { display: block; }
 .chat-contact b { font-size: 14px; font-weight: 600; }
 .chat-contact small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.chat-socket-status { color: #d8892d; }
 .chat-room { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
 .chat-actions { display: flex; gap: 8px; }
 .chat-actions button { display: flex; min-width: 70px; align-items: center; justify-content: center; gap: 7px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 10px; }
@@ -641,6 +644,9 @@ button:disabled { cursor: wait; opacity: .65; }
   .auth-form-panel { min-height: 100dvh; justify-content: center; padding: max(30px, env(safe-area-inset-top)) 26px max(48px, env(safe-area-inset-bottom)); }
   .auth-form-heading { width: 100%; margin-bottom: 27px; text-align: center; }
   .auth-mobile-brand { display: block; margin: 0 auto 31px; color: #202941; font-family: "Archivo Black", ui-sans-serif, system-ui, sans-serif; font-size: 37.5px; font-weight: 400; letter-spacing: -.045em; text-align: center; }
+  .auth-mobile-promise { display: block; margin: 0 auto 25px; }
+  .auth-mobile-promise h1 { margin: 0 0 8px; color: #202941; font-size: 24px; font-weight: 650; letter-spacing: -.045em; line-height: 1.15; }
+  .auth-mobile-promise p { max-width: 290px; margin: 0 auto; color: #798399; font-size: 12px; line-height: 1.55; }
   .auth-form-heading > .eyebrow { display: none; }
   .auth-form-heading h2 { font-size: 27px; }
   .auth-legal { position: fixed; right: 0; bottom: 0; left: 0; padding: 12px; background: white; }

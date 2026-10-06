@@ -50,7 +50,23 @@ export async function loadMedia(id) {
 export function connect() {
   let ws, dead = false, reconnectTimer, reconnectDelay = 1000;
   const subs = new Set(), queuedMessages = [];
-  const canQueue = event => event.type === 'SEND_MESSAGE' || event.t === 'msg';
+  const queueableTypes = new Set([
+    'SEND_MESSAGE', 'msg', 'call-invite', 'call-join', 'call-leave', 'call-decline',
+    'WEBRTC_SIGNAL', 'sig'
+  ]);
+  const canQueue = event => queueableTypes.has(event.type || event.t);
+  const queue = event => {
+    if (queuedMessages.length >= 100) {
+      if (event.type === 'SEND_MESSAGE' || event.t === 'msg') return false;
+      const replaceIndex = queuedMessages.findIndex(item =>
+        item.event.type === 'WEBRTC_SIGNAL' || item.event.t === 'sig'
+      );
+      if (replaceIndex < 0) return false;
+      queuedMessages.splice(replaceIndex, 1);
+    }
+    queuedMessages.push({ event, expiresAt: Date.now() + 30_000 });
+    return true;
+  };
   const open = () => {
     if (dead) return;
     clearTimeout(reconnectTimer);
@@ -61,9 +77,14 @@ export function connect() {
     socket.onopen = () => {
       if (ws !== socket) return;
       reconnectDelay = 1000;
-      while (queuedMessages.length && ws.readyState === WebSocket.OPEN) {
+      while (queuedMessages.length && socket.readyState === WebSocket.OPEN) {
+        const queued = queuedMessages[0];
+        if (queued.expiresAt <= Date.now()) {
+          queuedMessages.shift();
+          continue;
+        }
         try {
-          ws.send(JSON.stringify(queuedMessages[0]));
+          socket.send(JSON.stringify(queued.event));
           queuedMessages.shift();
         } catch (error) {
           console.warn('Could not flush a queued WebSocket message:', error);
@@ -86,7 +107,10 @@ export function connect() {
       subs.forEach(f => f(event));
     };
     socket.onerror = () => {
-      if (ws === socket) subs.forEach(listener => listener({ t: 'reconnecting' }));
+      if (ws === socket) {
+        subs.forEach(listener => listener({ t: 'reconnecting' }));
+        socket.close();
+      }
     };
     socket.onclose = () => {
       if (dead || ws !== socket) return;
@@ -104,14 +128,17 @@ export function connect() {
           ws.send(JSON.stringify(o));
           return true;
         } catch (error) {
-          if (!canQueue(o)) throw error;
-          queuedMessages.push(o);
+          if (!canQueue(o) || !queue(o)) {
+            console.warn('Could not send a WebSocket event:', error);
+            ws.close();
+            return false;
+          }
           ws.close();
           return true;
         }
       }
       if (canQueue(o)) {
-        queuedMessages.push(o);
+        if (!queue(o)) return false;
         if (!ws || ws.readyState === WebSocket.CLOSED) open();
         return true;
       }

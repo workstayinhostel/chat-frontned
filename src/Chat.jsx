@@ -439,7 +439,7 @@ export function ChatInput({ value, onChange, onSubmit, onUpload, onRecord, recor
   </form>;
 }
 
-export function MessageThread({ act, user, list, callLogs, callNotices = [], ws, online, lastSeen, typing, dark, ac, onCall, onBack, onPending, onSendFailure, onRetryMessage, onMarkRead, onToggleDetails, error }) {
+export function MessageThread({ act, user, list, callLogs, callNotices = [], ws, online, lastSeen, typing, dark, ac, connectionStatus, onCall, onBack, onPending, onSendFailure, onRetryMessage, onMarkRead, onToggleDetails, error }) {
   const [t, setT] = useState(''), [edit, setEdit] = useState(null), [rec, setRec] = useState(null), [uploads, setUploads] = useState(0), [uploadStatus, setUploadStatus] = useState(''), [mediaError, setMediaError] = useState(''), [messageMenu, setMessageMenu] = useState(null), [deleteMessage, setDeleteMessage] = useState(null), [dragging, setDragging] = useState(false), end = useRef(), lt = useRef(0), seenSent = useRef(new Set());
   const sendRead = () => {
     if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
@@ -645,7 +645,7 @@ export function MessageThread({ act, user, list, callLogs, callNotices = [], ws,
         <span aria-hidden="true">←</span>
       </button>
       <Avatar url={!g && act.avatarUrl} label={name} className="chat-contact-avatar" style={{ background: ac }} />
-      <div className="chat-contact"><b>{name}</b><small>{g ? `${act.members.length} members` : `@${act.username}${typing[act.id] ? ' · Typing…' : online[act.id] ? ' · Online' : lastSeen[act.id] ? ` · Last seen ${relativeLastSeen(lastSeen[act.id])}` : ' · Offline'}`}</small></div>
+      <div className="chat-contact"><b>{name}</b><small>{g ? `${act.members.length} members` : `@${act.username}${typing[act.id] ? ' · Typing…' : online[act.id] ? ' · Online' : lastSeen[act.id] ? ` · Last seen ${relativeLastSeen(lastSeen[act.id])}` : ' · Offline'}`}{connectionStatus !== 'connected' && <span className="chat-socket-status"> · {connectionStatus === 'error' ? 'Connection error' : 'Reconnecting…'}</span>}</small></div>
       <div className="chat-actions">
         <button onClick={onToggleDetails} aria-label="Toggle conversation details" title="Conversation details"><span>ⓘ</span></button>
         <button onClick={() => onCall(false)} aria-label="Start voice call" title="Voice call"><span>☎</span><small>Call</small></button>
@@ -1169,8 +1169,10 @@ export default function Chat({ user, setUser, logout }) {
       }
       if (e.t === 'delivered') setMsgs(s => ({ ...s, [e.to]: (s[e.to] || []).map(m => m.status === 'sent' ? { ...m, status: 'delivered' } : m) }));
       if (type === 'TYPING_INDICATOR' || e.t === 'typing') {
-        const k = e.group || e.from;
-        setTyping(t => ({ ...t, [k]: e.from }));
+        const sender = e.from || e.userId || e.user?.id;
+        const k = e.group || sender;
+        if (!k || !sender) return;
+        setTyping(t => ({ ...t, [k]: sender }));
         clearTimeout(typingTimers.current.get(k));
         typingTimers.current.set(k, setTimeout(() => setTyping(t => ({ ...t, [k]: null })), 2500));
       }
@@ -1246,6 +1248,37 @@ export default function Chat({ user, setUser, logout }) {
       document.removeEventListener('visibilitychange', retryPending);
       window.removeEventListener('pageshow', retryPending);
     };
+  }, []);
+  useEffect(() => {
+    const refreshActiveMessages = () => {
+      const current = activeChatR.current;
+      if (document.visibilityState !== 'visible' || !current) return;
+      api(`/messages/${current.id}${current.members ? `?g=${encodeURIComponent(current.id)}` : ''}`)
+        .then(messages => {
+          setMsgs(state => {
+            const merged = [...(state[current.id] || [])];
+            messages.forEach(message => {
+              const normalized = normalizeMessage(message);
+              const match = merged.find(item =>
+                item.id === normalized.id ||
+                (normalized.clientId && item.clientId === normalized.clientId)
+              );
+              if (match && match.status === 'sending' && normalized.status === 'sent') {
+                normalized.status = 'sent';
+              }
+              const next = mergeMessage(merged, normalized);
+              merged.splice(0, merged.length, ...next);
+            });
+            return {
+              ...state,
+              [current.id]: merged.sort((first, second) => new Date(first.at) - new Date(second.at))
+            };
+          });
+        })
+        .catch(refreshError => setError(refreshError.message));
+    };
+    const timer = setInterval(refreshActiveMessages, 12_000);
+    return () => clearInterval(timer);
   }, []);
   useEffect(() => {
     if (!chatsLoaded || restoredChat.current) return;
@@ -1525,7 +1558,7 @@ export default function Chat({ user, setUser, logout }) {
         <button className="account-settings-button" onClick={() => setAccountOpen(true)}><span>⚙</span> Account <b>→</b></button>
       </div>
     </ChatList>
-    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} callNotices={callNotices} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setDetailsOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'failed' } : item)]))); setError(message); }} onRetryMessage={clientId => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'sending' } : item)]))); setError(''); }} error={error} />
+    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} callNotices={callNotices} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} connectionStatus={socket.status} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setDetailsOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'failed' } : item)]))); setError(message); }} onRetryMessage={clientId => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'sending' } : item)]))); setError(''); }} error={error} />
       : <div className="chat-welcome"><span className="welcome-mark">m</span><b>Your conversations, all together.</b><p>Search for someone by username and say hello.</p></div>}
     {accountOpen && <SettingsDrawer user={user} setUser={setUser} logout={logout} close={() => setAccountOpen(false)} onProfileUpdate={load} />}
     {detailsOpen && act && <ConversationDetailsDrawer activeChat={act} messages={msgs[act.id] || []}

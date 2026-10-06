@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 
 const usernameValue = value => `@${value.replace(/^@+/, '')}`;
-const usernameForApi = value => value.replace(/^@+/, '').trim();
+const usernameForApi = value => value.replace(/^@+/, '').replace(/\s/g, '').trim();
 
 function BrandPanel() {
   return <section className="auth-brand">
@@ -12,7 +12,7 @@ function BrandPanel() {
     </a>
     <div className="brand-copy">
       <span className="eyebrow"><i /> PRIVATE BY DESIGN</span>
-      <h1>Chat securely<br />with anyone.</h1>
+      <h1>Designed for one <span className="brand-heart" aria-hidden="true">♥</span>,<br />made for all.</h1>
       <p>Your conversations, calls and moments — all in one calm, private space.</p>
     </div>
     <div className="chat-preview" aria-hidden="true">
@@ -39,7 +39,7 @@ function AuthLayout({ children }) {
 function UsernameField({ value, onChange, onKeyDown }) {
   return <label className="auth-field">
     <span>Username</span>
-    <input autoComplete="username" autoCapitalize="none" spellCheck="false" autoFocus
+    <input type="text" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck="false" autoFocus
       placeholder="@yourname" value={usernameValue(value)} onChange={e => onChange(usernameForApi(e.target.value))}
       onKeyDown={onKeyDown} />
   </label>;
@@ -158,6 +158,10 @@ export function Auth({ onAuth }) {
   return <AuthLayout>
     <div className="auth-form-heading">
       <span className="auth-mobile-brand">metufy</span>
+      <div className="auth-mobile-promise">
+        <h1>Designed for one <span className="brand-heart" aria-hidden="true">♥</span>, made for all.</h1>
+        <p>Your conversations, calls and moments — all in one calm, private space.</p>
+      </div>
       <span className="eyebrow">WELCOME BACK</span>
       <h2>{step === 'username' ? 'Good to see you.' : 'Welcome back.'}</h2>
       <p>{step === 'username' ? 'Sign in to pick up where you left off.' : `Signing in as ${usernameValue(username)}`}</p>
@@ -176,7 +180,7 @@ export function Auth({ onAuth }) {
         </>}
       {err && <p className="auth-error" role="alert">{err}</p>}
       {step === 'username'
-        ? <button className="auth-primary" disabled={busy} onClick={verifyUsername}>{busy ? 'Checking…' : 'Continue'} <span>→</span></button>
+        ? <button type="button" className="auth-primary" disabled={busy} onClick={verifyUsername}>{busy ? 'Checking…' : 'Continue'} <span>→</span></button>
         : <button className="auth-primary" disabled={busy} onClick={login}>{busy ? 'Signing in…' : 'Sign in'} <span>→</span></button>}
       <div className="auth-divider"><span /> <small>OR CONTINUE WITH</small> <span /></div>
       <div className="google-button" ref={button} aria-label="Continue with Google" />
@@ -196,8 +200,12 @@ export function Setup({ user, onDone }) {
     setErr('');
   };
   const save = async () => {
-    if (!f.username.trim() || !f.password) {
-      setErr('Choose a username and create a password to finish setting up your account.');
+    if (!f.username.trim()) {
+      setErr('Choose a username to finish setting up your account.');
+      return;
+    }
+    if (f.password.length < 3 || f.password.length > 20 || /\s/.test(f.password)) {
+      setErr('Your password must be 3–20 characters with no spaces.');
       return;
     }
     setBusy(true);
@@ -220,9 +228,9 @@ export function Setup({ user, onDone }) {
     <div className="auth-fields">
       <UsernameField value={f.username} onChange={value => setF({ ...f, username: value })} />
       <label className="auth-field"><span>Display name</span><input autoComplete="name" placeholder="How should we call you?" value={f.displayName} onChange={ch('displayName')} /></label>
-      <label className="auth-field"><span>Create a password</span><input type="password" autoComplete="new-password" placeholder="At least 12 characters" value={f.password} onChange={ch('password')} /></label>
+      <label className="auth-field"><span>Create a password</span><input type="password" autoComplete="new-password" minLength={3} maxLength={20} pattern="\S*" title="Use 3–20 characters with no spaces." placeholder="3–20 characters, no spaces" value={f.password} onChange={e => setF({ ...f, password: e.target.value.replace(/\s/g, '') })} /></label>
       {err && <p className="auth-error" role="alert">{err}</p>}
-      <button className="auth-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Create account'} <span>→</span></button>
+      <button type="button" className="auth-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Create account'} <span>→</span></button>
     </div>
     <p className="auth-terms">Your username must be unique. You can share it with people you want to reach.</p>
   </AuthLayout>;
