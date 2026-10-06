@@ -7,7 +7,11 @@ test('prefers switching facing mode on phones with multiple cameras', () => {
     { deviceId: 'front' },
     { deviceId: 'rear' }
   ], { deviceId: 'front', facingMode: 'user' }), [
-    { facingMode: { exact: 'environment' } },
+    {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    },
     { deviceId: { exact: 'rear' } }
   ]);
 });
@@ -17,14 +21,22 @@ test('falls back to another camera ID if the requested front/back mode is unavai
     { deviceId: 'front' },
     { deviceId: 'rear' }
   ], { deviceId: 'front' }), [
-    { facingMode: { exact: 'environment' } },
+    {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    },
     { deviceId: { exact: 'rear' } }
   ]);
 });
 
 test('falls back to facing mode when camera IDs are unavailable', () => {
   assert.deepEqual(getCameraSwitchConstraints([], { facingMode: 'environment' }), [
-    { facingMode: { exact: 'user' } }
+    {
+      facingMode: { ideal: 'user' },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    }
   ]);
 });
 

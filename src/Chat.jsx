@@ -231,7 +231,7 @@ function CallLogItem({ call, currentUserId, group }) {
   </div>;
 }
 
-export function SettingsDrawer({ user, setUser, logout, close, activeChat, messages = [], onProfileUpdate }) {
+export function SettingsDrawer({ user, setUser, logout, close, onProfileUpdate }) {
   const [f, setF] = useState({ displayName: user.displayName, activeStatus: user.activeStatus, theme: user.theme, avatarUrl: user.avatarUrl });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false), [photoUploading, setPhotoUploading] = useState(false), [photoProgress, setPhotoProgress] = useState('');
@@ -309,24 +309,60 @@ export function SettingsDrawer({ user, setUser, logout, close, activeChat, messa
         <label className="account-setting-row"><span><b>Theme</b><small>Choose your chat appearance</small></span><select value={f.theme.wallpaper} onChange={e => setF({ ...f, theme: { ...f.theme, wallpaper: e.target.value } })}><option value="dark">Dark</option><option value="light">Light</option></select></label>
         <label className="account-setting-row"><span><b>Accent color</b><small>Personalize your chat controls</small></span><input type="color" value={f.theme.accent} onChange={e => setF({ ...f, theme: { ...f.theme, accent: e.target.value } })} /></label>
       </section>
-      {activeChat && <section className="account-section">
-        <div className="account-section-heading"><b>{activeChat.name || activeChat.displayName}</b><small>Conversation details</small></div>
-        {activeChat.members && <div className="details-members">{activeChat.members.map(member =>
-          <span key={member.id}><Avatar url={member.avatarUrl} label={member.displayName} className="conversation-avatar" /><b>{member.displayName}</b></span>
-        )}</div>}
-        <div className="details-media-gallery">
-          {messages.filter(message => message.kind === 'image' && !message.deleted && message.mediaUrl).map(message =>
-            <img key={message.id} src={message.mediaUrl} alt="Shared photo" />
-          )}
-        </div>
-        {!messages.some(message => message.kind === 'image' && !message.deleted) && <small className="account-photo-hint">No shared photos yet.</small>}
-      </section>}
       {error && <p role="alert" className="account-error">{error}</p>}
       <button className="account-save" onClick={save} disabled={saving}>{saving ? 'Saving changes…' : 'Save changes'}</button>
       <button className="account-logout" onClick={logout}>Log out of Metufy</button>
     </section>
   </aside>;
 }
+
+function ConversationDetailsDrawer({ activeChat, messages, close, accent }) {
+  const isGroup = Boolean(activeChat.members);
+  const sharedMedia = messages.filter(message =>
+    !message.deleted && ['image', 'audio'].includes(message.kind) &&
+    (message.mediaUrl || message.text)
+  );
+  const displayName = activeChat.name || activeChat.displayName || 'Conversation';
+  return <aside className="account-page settings-drawer conversation-details-drawer">
+    <header className="account-header">
+      <button type="button" onClick={close} aria-label="Close chat info">←</button>
+      <div><b>Chat info</b><small>People and shared media</small></div>
+    </header>
+    <section className="account-content">
+      <div className="account-profile-card conversation-profile-card">
+        <Avatar url={!isGroup ? activeChat.avatarUrl : undefined} label={displayName}
+          className="account-avatar" style={{ background: accent }} />
+        <div>
+          <h1>{displayName}</h1>
+          {!isGroup && <p>@{activeChat.username || 'username unavailable'}</p>}
+          <small>{isGroup ? `${activeChat.members.length} members` : 'Conversation profile'}</small>
+        </div>
+      </div>
+      {isGroup && <section className="account-section">
+        <div className="account-section-heading"><b>People</b><small>Members of this group</small></div>
+        <div className="details-members">{activeChat.members.map(member =>
+          <span key={member.id}>
+            <Avatar url={member.avatarUrl} label={member.displayName} className="conversation-avatar" />
+            <span><b>{member.displayName}</b>{member.username && <small>@{member.username}</small>}</span>
+          </span>
+        )}</div>
+      </section>}
+      <section className="account-section">
+        <div className="account-section-heading">
+          <b>Shared media</b><small>{sharedMedia.length ? `${sharedMedia.length} item${sharedMedia.length === 1 ? '' : 's'}` : 'Photos and voice messages in this chat'}</small>
+        </div>
+        {sharedMedia.length
+          ? <div className="conversation-shared-media">{sharedMedia.map(message =>
+            <div key={message.id || message.clientId || message.at} className="conversation-shared-item">
+              <MediaAttachment id={message.text} kind={message.kind} mediaUrl={message.mediaUrl} />
+            </div>
+          )}</div>
+          : <small className="account-photo-hint">No shared media yet.</small>}
+      </section>
+    </section>
+  </aside>;
+}
+
 function NewGroup({ close, done }) {
   const [n, setN] = useState(''), [u, setU] = useState('');
   const [error, setError] = useState('');
@@ -664,13 +700,15 @@ export default function Chat({ user, setUser, logout }) {
   const [q, setQ] = useState(''), [res, setRes] = useState([]), [modal, setModal] = useState(null), [call, setCall] = useState(null), [inv, setInv] = useState(null), [, setW] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(320), [themeBusy, setThemeBusy] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [chatFilter, setChatFilter] = useState('all');
   const [pinnedChats, setPinnedChats] = useState(() => {
     try { return JSON.parse(localStorage.getItem(`metufy-pinned-${user.id}`) || '[]'); } catch { return []; }
   });
   const [callSetupError, setCallSetupError] = useState('');
+  const [callSetupBusy, setCallSetupBusy] = useState(false);
   const callInviteNoticeShown = useRef(false), callRestoreStarted = useRef(false), missedCallsChecked = useRef(false);
-  const soundElements = useRef(null), soundPending = useRef(null), ringingSoundRef = useRef(null), soundReadyRef = useRef(false), incomingCallRef = useRef(inv), activeCallRef = useRef(call), answeredCallRef = useRef(null);
+  const soundElements = useRef(null), soundPending = useRef(null), ringingSoundRef = useRef(null), soundReadyRef = useRef(false), incomingCallRef = useRef(inv), activeCallRef = useRef(call), answeredCallRef = useRef(null), playedCallEndTones = useRef(new Set());
   const [soundReady, setSoundReady] = useState(() => {
     try { return localStorage.getItem('metufy-sounds-enabled') === 'true'; } catch { return false; }
   });
@@ -823,6 +861,15 @@ export default function Chat({ user, setUser, logout }) {
       setSoundReady(false);
       console.warn(`Could not play ${name} sound:`, error);
     });
+  };
+  const playCallEndTone = room => {
+    if (playedCallEndTones.current.has(room)) return;
+    playedCallEndTones.current.add(room);
+    if (playedCallEndTones.current.size > 50) {
+      const oldestRoom = playedCallEndTones.current.values().next().value;
+      playedCallEndTones.current.delete(oldestRoom);
+    }
+    playSound('callEnded');
   };
   const enableSounds = (soundName, loop = false) => {
     const sounds = soundElements.current;
@@ -1160,11 +1207,8 @@ export default function Chat({ user, setUser, logout }) {
         if (incomingCallRef.current?.room === e.room) {
           incomingCallRef.current = null;
           setInv(null);
-          playSound('callEnded');
         }
         if (activeCallRef.current?.room === e.room) {
-          if (answeredCallRef.current !== e.room) playSound('callEnded');
-          answeredCallRef.current = null;
           activeCallRef.current = null;
           setCall(null);
         }
@@ -1269,8 +1313,31 @@ export default function Chat({ user, setUser, logout }) {
       throw new Error('Microphone and camera access require HTTPS. Open Metufy using a secure connection.');
     }
     try {
-      return await navigator.mediaDevices.getUserMedia({ audio: true, video });
+      let expired = false;
+      let timeout;
+      const mediaRequest = navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: video ? { facingMode: { ideal: 'user' } } : false
+      }).then(stream => {
+        if (expired) stream.getTracks().forEach(track => track.stop());
+        return stream;
+      });
+      try {
+        return await Promise.race([
+          mediaRequest,
+          new Promise((_, reject) => {
+            timeout = setTimeout(() => {
+              expired = true;
+              reject(new Error('Camera or microphone access is taking too long. Check Safari’s permission prompt and allow access, then try again.'));
+            }, 20_000);
+          })
+        ]);
+      } finally {
+        clearTimeout(timeout);
+        expired = true;
+      }
     } catch (error) {
+      if (error.message.includes('taking too long')) throw error;
       if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
         throw new Error(`Allow ${video ? 'camera and microphone' : 'microphone'} access in your browser settings, then try again.`);
       }
@@ -1281,8 +1348,9 @@ export default function Chat({ user, setUser, logout }) {
     }
   };
   const startCall = async video => {
+    if (callSetupBusy) return;
     setCallSetupError('');
-    enableSounds('callOutgoing', true);
+    setCallSetupBusy(true);
     let stream;
     try {
       stream = await requestCallMedia(video);
@@ -1293,6 +1361,7 @@ export default function Chat({ user, setUser, logout }) {
       if (!ws.current.send(invite)) throw new Error('Reconnecting to Metufy. Please try the call again.');
       const activeCall = {
         room,
+        outgoing: true,
         video,
         localStream: stream,
         name: act.members ? act.name : act.displayName,
@@ -1308,18 +1377,21 @@ export default function Chat({ user, setUser, logout }) {
       activeCallRef.current = activeCall;
       answeredCallRef.current = null;
       setCall(activeCall);
+      enableSounds('callOutgoing', true);
       if (answeredCallRef.current !== room) playSound('callOutgoing', true);
     } catch (error) {
       stopSound('callOutgoing');
       clearCallRecovery();
       stream?.getTracks().forEach(track => track.stop());
       setCallSetupError(error.message);
+    } finally {
+      setCallSetupBusy(false);
     }
   };
   const acceptCall = async () => {
-    if (!inv) return;
+    if (!inv || callSetupBusy) return;
     setCallSetupError('');
-    enableSounds('callIncoming', true);
+    setCallSetupBusy(true);
     stopSound('callIncoming');
     try {
       const localStream = await requestCallMedia(inv.video);
@@ -1331,6 +1403,7 @@ export default function Chat({ user, setUser, logout }) {
           : chats.users.find(contact => contact.id === inv.from);
       const activeCall = {
         room: inv.room,
+        outgoing: false,
         video: inv.video,
         localStream,
         name: inv.name || inv.fromName,
@@ -1352,6 +1425,8 @@ export default function Chat({ user, setUser, logout }) {
     } catch (error) {
       setCallSetupError(error.message);
       if (incomingCallRef.current?.room === inv.room) playSound('callIncoming', true);
+    } finally {
+      setCallSetupBusy(false);
     }
   };
   useEffect(() => {
@@ -1450,9 +1525,11 @@ export default function Chat({ user, setUser, logout }) {
         <button className="account-settings-button" onClick={() => setAccountOpen(true)}><span>⚙</span> Account <b>→</b></button>
       </div>
     </ChatList>
-    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} callNotices={callNotices} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setAccountOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'failed' } : item)]))); setError(message); }} onRetryMessage={clientId => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'sending' } : item)]))); setError(''); }} error={error} />
+    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} callNotices={callNotices} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setDetailsOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'failed' } : item)]))); setError(message); }} onRetryMessage={clientId => { setMsgs(s => Object.fromEntries(Object.entries(s).map(([key, items]) => [key, items.map(item => item.clientId === clientId ? { ...item, status: 'sending' } : item)]))); setError(''); }} error={error} />
       : <div className="chat-welcome"><span className="welcome-mark">m</span><b>Your conversations, all together.</b><p>Search for someone by username and say hello.</p></div>}
-    {accountOpen && <SettingsDrawer user={user} setUser={setUser} logout={logout} close={() => setAccountOpen(false)} activeChat={act} messages={act ? msgs[act.id] || [] : []} onProfileUpdate={load} />}
+    {accountOpen && <SettingsDrawer user={user} setUser={setUser} logout={logout} close={() => setAccountOpen(false)} onProfileUpdate={load} />}
+    {detailsOpen && act && <ConversationDetailsDrawer activeChat={act} messages={msgs[act.id] || []}
+      accent={ac} close={() => setDetailsOpen(false)} />}
     {modal === 'group' && <NewGroup close={() => setModal(null)} done={load} />}
     {!soundReady && !soundPromptDismissed && !inv && !call && <aside className="sound-enable-prompt" role="status">
       <div className="sound-enable-copy">
@@ -1479,6 +1556,7 @@ export default function Chat({ user, setUser, logout }) {
           }
         }}>Not now</button>
       </aside>}
+    {callSetupBusy && <div className="call-setup-waiting" role="status">Requesting microphone{call ? ' and camera' : ''} access… Allow the browser permission prompt to continue.</div>}
     {callSetupError && <div className="call-setup-error" role="alert"><span>{callSetupError}</span><button onClick={() => setCallSetupError('')} aria-label="Dismiss">×</button></div>}
     {inv && !call && <CallNotification
       caller={{ ...inv, avatarUrl: chats.users.find(contact => contact.id === inv.from)?.avatarUrl }}
@@ -1505,13 +1583,19 @@ export default function Chat({ user, setUser, logout }) {
         activeCallRef.current = null;
         setCall(null);
         showCallJoinNotice();
-      }} onEnd={() => {
-      stopSound('callIncoming');
-      stopSound('callOutgoing');
-      answeredCallRef.current = null;
-      activeCallRef.current = null;
-      clearCallRecovery(call.room);
-      setCall(null);
-    }} />}
+      }} onEnd={(source, event) => {
+        const answered = answeredCallRef.current === call.room;
+        const remoteDeclined = source === 'remote' && call.outgoing && event?.from && event.from !== user.id;
+        if ((source === 'local' && (answered || call.outgoing)) ||
+          (source === 'remote' && (answered || remoteDeclined))) {
+          playCallEndTone(call.room);
+        }
+        stopSound('callIncoming');
+        stopSound('callOutgoing');
+        answeredCallRef.current = null;
+        activeCallRef.current = null;
+        clearCallRecovery(call.room);
+        setCall(null);
+      }} />}
   </ChatLayout>;
 }

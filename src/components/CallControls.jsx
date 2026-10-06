@@ -24,6 +24,7 @@ function DeviceMenu({ video, devices, selectedDevices, onSelectDevice }) {
 export default function CallControls({
   muted,
   cameraOff,
+  cameraSwitching,
   sharingScreen,
   video,
   audioLevel,
@@ -62,9 +63,9 @@ export default function CallControls({
         title={canShareScreen ? sharingScreen ? 'Stop screen sharing' : 'Share screen' : 'Screen sharing is not available in this browser'}>
         <span className="call-dock-icon"><MonitorUp /></span><small>{sharingScreen ? 'Stop share' : 'Share'}</small>
       </button>
-      <button type="button" className="call-dock-button call-dock-switch-camera" onClick={onSwitchCamera}
+      <button type="button" className="call-dock-button call-dock-switch-camera" onClick={onSwitchCamera} disabled={cameraSwitching}
         aria-label="Switch front or rear camera" title="Switch front or rear camera">
-        <span className="call-dock-icon"><SwitchCamera /></span><small>Flip camera</small>
+        <span className="call-dock-icon"><SwitchCamera /></span><small>{cameraSwitching ? 'Switching…' : 'Flip camera'}</small>
       </button>
       <button type="button" className="call-dock-button call-fit-video" onClick={onToggleVideoFit}
         aria-label={videoFit === 'fit' ? 'Fill video frame' : 'Fit full video frame'}

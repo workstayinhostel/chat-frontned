@@ -58,6 +58,34 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
+    const resumeReloadDelay = 5 * 60 * 1000;
+    let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : 0;
+    let reloadStarted = false;
+    const reloadAfterLongPause = () => {
+      if (reloadStarted) return;
+      reloadStarted = true;
+      window.location.reload();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+      } else if (hiddenAt && Date.now() - hiddenAt >= resumeReloadDelay) {
+        reloadAfterLongPause();
+      } else {
+        hiddenAt = 0;
+      }
+    };
+    const onPageShow = event => {
+      if (event.persisted) reloadAfterLongPause();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, []);
+  useEffect(() => {
     const expire = () => {
       sessionStorage.clear();
       setUser(null);

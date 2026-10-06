@@ -94,7 +94,7 @@ export default function CallWindow({ call, user, ws, onEnd, onEnableSound }) {
       {hiddenSelf ? 'Show self view' : 'Hide self view'}
     </button>}
     {chatOpen && <InCallChat ws={ws} chatId={call.chatId} user={user} room={call.room} />}
-    <CallControls muted={controls.muted} cameraOff={controls.cameraOff} sharingScreen={controls.sharingScreen}
+    <CallControls muted={controls.muted} cameraOff={controls.cameraOff} cameraSwitching={controls.cameraSwitching} sharingScreen={controls.sharingScreen}
       video={call.video} audioLevel={controls.levels.local || 0} devices={controls.devices}
       canShareScreen={controls.canShareScreen} videoFit={videoFit}
       selectedDevices={controls.selectedDevices} onMute={controls.toggleMute} onCamera={controls.toggleCamera}

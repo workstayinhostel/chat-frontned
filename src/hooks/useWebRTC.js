@@ -19,12 +19,20 @@ export function shouldRetryCallJoin(event, room) {
 
 export function getCameraSwitchConstraints(cameras, settings = {}) {
   const nextFacingMode = settings.facingMode === 'environment' ? 'user' : 'environment';
-  const constraints = [{ facingMode: { exact: nextFacingMode } }];
+  const constraints = [{
+    facingMode: { ideal: nextFacingMode },
+    width: { ideal: 1280 },
+    height: { ideal: 720 }
+  }];
 
   const currentIndex = cameras.findIndex(device => device.deviceId && device.deviceId === settings.deviceId);
-  const nextCamera = currentIndex >= 0
-    ? cameras[(currentIndex + 1) % cameras.length]
-    : cameras.find(device => device.deviceId && device.deviceId !== settings.deviceId);
+  const targetHints = nextFacingMode === 'environment'
+    ? ['back', 'rear', 'environment']
+    : ['front', 'user', 'facetime'];
+  const nextCamera = cameras.find(device => device.deviceId !== settings.deviceId &&
+    targetHints.some(hint => device.label?.toLowerCase().includes(hint))) ||
+    (currentIndex >= 0 ? cameras[(currentIndex + 1) % cameras.length] : undefined) ||
+    cameras.find(device => device.deviceId && device.deviceId !== settings.deviceId);
   if (nextCamera?.deviceId) constraints.push({ deviceId: { exact: nextCamera.deviceId } });
   return constraints;
 }
@@ -45,6 +53,8 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
   const [streams, setStreams] = useState({});
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
+  const [cameraSwitching, setCameraSwitching] = useState(false);
+  const cameraSwitchLock = useRef(false);
   const [sharingScreen, setSharingScreen] = useState(false);
   const [displayPreview, setDisplayPreview] = useState(null);
   const [callStatus, setCallStatus] = useState('Connecting securely…');
@@ -205,7 +215,7 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
         } else if (event.t === 'call-left') {
           closePeer(event.id);
         } else if (event.t === 'call-ended') {
-          onEndRef.current();
+          onEndRef.current('remote', event);
         }
       } catch (error) {
         if (live) setCallError(`Could not establish the call: ${error.message}`);
@@ -375,19 +385,44 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
   }, [localStream]);
 
   const switchCamera = useCallback(async () => {
+    if (cameraSwitchLock.current) return;
+    cameraSwitchLock.current = true;
     setDeviceError('');
+    setCameraSwitching(true);
+    let currentTrack;
+    let previousSettings;
     try {
-      const currentTrack = localStream?.getVideoTracks()[0];
+      currentTrack = localStream?.getVideoTracks()[0];
       if (!currentTrack) throw new Error('No active camera is available to switch.');
       if (displayStream.current) throw new Error('Stop screen sharing before switching cameras.');
+      previousSettings = currentTrack.getSettings();
       const allDevices = await navigator.mediaDevices.enumerateDevices();
       const cameras = allDevices.filter(device => device.kind === 'videoinput');
-      const constraints = getCameraSwitchConstraints(cameras, currentTrack.getSettings());
+      const constraints = getCameraSwitchConstraints(cameras, previousSettings);
+      localStream.removeTrack(currentTrack);
+      currentTrack.stop();
+      await new Promise(resolve => setTimeout(resolve, 150));
+
       let replacementStream;
       let lastConstraintError;
       for (const video of constraints) {
         try {
           replacementStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+          const candidate = replacementStream.getVideoTracks()[0];
+          const candidateSettings = candidate?.getSettings() || {};
+          const targetFacingMode = video.facingMode?.ideal;
+          const alreadySwitched = targetFacingMode
+            ? candidateSettings.facingMode === targetFacingMode ||
+              Boolean(candidateSettings.deviceId && previousSettings.deviceId &&
+                candidateSettings.deviceId !== previousSettings.deviceId)
+            : !candidateSettings.deviceId || !previousSettings.deviceId ||
+              candidateSettings.deviceId !== previousSettings.deviceId;
+          if (candidate && !alreadySwitched && constraints.length > 1) {
+            replacementStream.getTracks().forEach(track => track.stop());
+            replacementStream = undefined;
+            lastConstraintError = new Error('The browser kept the current camera active.');
+            continue;
+          }
           break;
         } catch (error) {
           if (!['OverconstrainedError', 'ConstraintNotSatisfiedError', 'NotFoundError', 'TypeError'].includes(error.name)) {
@@ -405,8 +440,6 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
       replacement.enabled = !cameraOff;
       try {
         await replaceVideoTrack(replacement);
-        localStream.removeTrack(currentTrack);
-        currentTrack.stop();
         localStream.addTrack(replacement);
         const deviceId = replacement.getSettings().deviceId || '';
         setSelectedDevices(current => ({ ...current, videoinput: deviceId }));
@@ -420,7 +453,40 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
         throw error;
       }
     } catch (error) {
+      if (currentTrack && previousSettings && !localStream.getVideoTracks().some(track => track.readyState === 'live')) {
+        try {
+          const restoreConstraints = previousSettings.deviceId
+            ? { deviceId: { ideal: previousSettings.deviceId } }
+            : previousSettings.facingMode
+              ? { facingMode: { ideal: previousSettings.facingMode } }
+              : true;
+          const restoredStream = await navigator.mediaDevices.getUserMedia({
+            video: restoreConstraints,
+            audio: false
+          });
+          const restoredTrack = restoredStream.getVideoTracks()[0];
+          if (!restoredTrack) {
+            restoredStream.getTracks().forEach(track => track.stop());
+            throw new Error('The previous camera could not be restored.');
+          }
+          restoredTrack.enabled = !cameraOff;
+          try {
+            await replaceVideoTrack(restoredTrack);
+            localStream.addTrack(restoredTrack);
+            restoredStream.getTracks().filter(track => track !== restoredTrack).forEach(track => track.stop());
+          } catch (restoreError) {
+            restoredStream.getTracks().forEach(track => track.stop());
+            throw restoreError;
+          }
+        } catch (restoreError) {
+          setDeviceError(`Could not switch camera (${error.message}); the previous camera could not be restored (${restoreError.message}).`);
+          return;
+        }
+      }
       setDeviceError(`Could not switch camera: ${error.message}`);
+    } finally {
+      cameraSwitchLock.current = false;
+      setCameraSwitching(false);
     }
   }, [cameraOff, localStream, replaceVideoTrack]);
 
@@ -446,6 +512,7 @@ export function useWebRTC({ ws, room, localStream, onEnd, onCallJoinFailure }) {
     levels,
     speaking,
     selectedDevices,
+    cameraSwitching,
     devices,
     deviceError,
     setDeviceError,
