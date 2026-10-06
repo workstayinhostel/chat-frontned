@@ -13,7 +13,7 @@ function VideoTile({ id, stream, label, local, cameraOff, speaking, audioLevel, 
     element.play().catch(error => onPlaybackError(`Video playback needs permission: ${error.message}`));
   }, [onPlaybackError, outputDevice, stream]);
 
-  return <article className={`call-video-tile ${speaking ? 'call-speaker-active' : ''} ${local ? 'call-video-self' : ''}`}>
+  return <article className={`call-video-tile ${local ? 'call-video-self' : 'call-video-remote'} ${speaking ? 'call-speaker-active' : ''}`}>
     {!cameraOff && <video ref={video} autoPlay playsInline muted={local} className={flipSelf && local ? 'call-video-flipped' : ''} />}
     {(cameraOff || !stream?.getVideoTracks().some(track => track.readyState === 'live')) &&
       <div className="call-video-placeholder"><span>{label?.[0]?.toUpperCase() || '?'}</span><small>{cameraOff ? 'Camera off' : label}</small></div>}
@@ -48,7 +48,8 @@ export default function VideoGrid({
     ...(!hiddenSelf && localStream ? [['local', localStream]] : []),
     ...remote
   ];
-  return <div className={`call-video-grid ${video ? 'call-video-grid-video' : 'call-video-grid-audio'}`}
+  const oneToOne = video && remote.length === 1 && localStream && !hiddenSelf;
+  return <div className={`call-video-grid ${video ? 'call-video-grid-video' : 'call-video-grid-audio'} ${oneToOne ? 'call-video-grid-one-to-one' : ''}`}
     style={{ '--call-columns': people.length < 2 ? 1 : people.length < 5 ? 2 : 3 }}>
     {remote.map(([id, stream]) => <VideoTile key={id} id={id} stream={stream} label={participants[id]}
       local={false} cameraOff={false} speaking={Date.now() - (speaking[id] || 0) < 1200}

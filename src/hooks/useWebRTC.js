@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 const CALL_EVENTS = new Set(['call-invite', 'call-join', 'call-leave', 'call-decline', 'WEBRTC_SIGNAL', 'sig']);
+const MAX_CALL_JOIN_RETRIES = 4;
 
 export function isCallSignalingError(event, room) {
   return event?.t === 'error' &&
@@ -9,10 +10,19 @@ export function isCallSignalingError(event, room) {
     (!event.eventType || CALL_EVENTS.has(event.eventType));
 }
 
+export function shouldRetryCallJoin(event, room) {
+  return event?.t === 'error' &&
+    event.error === 'Call invite required' &&
+    (!event.room || event.room === room) &&
+    (!event.eventType || event.eventType === 'call-join');
+}
+
 export function useWebRTC({ ws, room, localStream, onEnd }) {
   const peers = useRef(new Map());
   const pendingIce = useRef(new Map());
   const disconnectTimers = useRef(new Map());
+  const joinRetryTimer = useRef(null);
+  const joinAttempts = useRef(0);
   const displayStream = useRef(null);
   const videoSenders = useRef(new Map());
   const onEndRef = useRef(onEnd);
@@ -28,6 +38,7 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
   const [levels, setLevels] = useState({});
   const [devices, setDevices] = useState({ audioinput: [], videoinput: [], audiooutput: [] });
   const [selectedDevices, setSelectedDevices] = useState({ audioinput: '', videoinput: '', audiooutput: '' });
+  const [canShareScreen] = useState(() => Boolean(navigator.mediaDevices?.getDisplayMedia));
   const [deviceError, setDeviceError] = useState('');
   onEndRef.current = onEnd;
 
@@ -113,6 +124,24 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
     let live = true;
     const handleEvent = async event => {
       if (event.t === 'error') {
+        if (shouldRetryCallJoin(event, room)) {
+          if (joinAttempts.current >= MAX_CALL_JOIN_RETRIES) {
+            setCallStatus('Call could not connect');
+            setCallError('Could not join the call. Please end the call and try again.');
+            return;
+          }
+          const delay = 200 * (2 ** joinAttempts.current);
+          joinAttempts.current += 1;
+          setCallStatus('Joining call…');
+          clearTimeout(joinRetryTimer.current);
+          joinRetryTimer.current = setTimeout(() => {
+            if (live && !ws.send({ t: 'call-join', room })) {
+              setCallStatus('Call could not connect');
+              setCallError('Reconnecting to Metufy. Please try the call again.');
+            }
+          }, delay);
+          return;
+        }
         if (isCallSignalingError(event, room)) {
           setCallStatus('Call could not connect');
           setCallError(event.error || 'The call could not be connected. Please try again.');
@@ -122,6 +151,10 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
       if (event.room !== room) return;
       try {
         if (event.t === 'call-peers') {
+          clearTimeout(joinRetryTimer.current);
+          joinRetryTimer.current = null;
+          joinAttempts.current = 0;
+          setCallError('');
           for (const peerId of event.ids || []) {
             const peer = peers.current.get(peerId) || createPeer(peerId);
             const offer = await peer.createOffer();
@@ -162,6 +195,8 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
     if (!ws.send({ t: 'call-join', room })) setCallError('Reconnecting to Metufy. Please try the call again.');
     return () => {
       live = false;
+      clearTimeout(joinRetryTimer.current);
+      joinRetryTimer.current = null;
       unsubscribe();
       ws.send({ t: 'call-leave', room });
       for (const peerId of peers.current.keys()) closePeer(peerId);
@@ -317,6 +352,51 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
     }
   }, [localStream]);
 
+  const switchCamera = useCallback(async () => {
+    setDeviceError('');
+    try {
+      const currentTrack = localStream?.getVideoTracks()[0];
+      if (!currentTrack) throw new Error('No active camera is available to switch.');
+      if (displayStream.current) throw new Error('Stop screen sharing before switching cameras.');
+      const facingMode = currentTrack.getSettings().facingMode;
+      const nextFacingMode = facingMode === 'environment' ? 'user' : 'environment';
+      const replacementStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: nextFacingMode } },
+        audio: false
+      });
+      let replacement = replacementStream.getVideoTracks()[0];
+      if (!replacement) throw new Error('The other camera did not provide a video track.');
+      const allDevices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = allDevices.filter(device => device.kind === 'videoinput');
+      const currentDeviceId = currentTrack.getSettings().deviceId;
+      if (currentDeviceId && replacement.getSettings().deviceId === currentDeviceId && cameras.length > 1) {
+        replacement.stop();
+        replacementStream.getTracks().filter(track => track !== replacement).forEach(track => track.stop());
+        const currentIndex = cameras.findIndex(device => device.deviceId === currentDeviceId);
+        const nextCamera = cameras[(currentIndex + 1) % cameras.length];
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: nextCamera.deviceId } },
+          audio: false
+        });
+        replacement = fallbackStream.getVideoTracks()[0];
+        if (!replacement) throw new Error('The selected camera did not provide a video track.');
+      }
+      replacement.enabled = !cameraOff;
+      await replaceVideoTrack(replacement);
+      localStream.removeTrack(currentTrack);
+      currentTrack.stop();
+      localStream.addTrack(replacement);
+      const deviceId = replacement.getSettings().deviceId || '';
+      setSelectedDevices(current => ({ ...current, videoinput: deviceId }));
+      setDevices(current => ({
+        ...current,
+        videoinput: allDevices.filter(device => device.kind === 'videoinput')
+      }));
+    } catch (error) {
+      setDeviceError(`Could not switch camera: ${error.message}`);
+    }
+  }, [cameraOff, localStream, replaceVideoTrack]);
+
   useEffect(() => () => {
     for (const meter of meterFrames.current.values()) {
       cancelAnimationFrame(meter.frame);
@@ -345,6 +425,8 @@ export function useWebRTC({ ws, room, localStream, onEnd }) {
     toggleMute,
     toggleCamera,
     toggleScreenShare,
-    selectDevice
+    selectDevice,
+    switchCamera,
+    canShareScreen
   };
 }

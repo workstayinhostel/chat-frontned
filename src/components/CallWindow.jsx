@@ -49,6 +49,7 @@ export default function CallWindow({ call, user, ws, onEnd, onEnableSound }) {
   const [playbackError, setPlaybackError] = useState('');
   const bubbleMoved = useRef(false);
   const controls = call.media;
+  const remoteCount = Object.keys(controls.streams).length;
   const onPointerDown = event => {
     event.currentTarget.setPointerCapture(event.pointerId);
     bubbleMoved.current = false;
@@ -75,7 +76,7 @@ export default function CallWindow({ call, user, ws, onEnd, onEnableSound }) {
       <span className="call-live-dot" />
       <div className="call-heading">
         <b>{call.name || (call.video ? 'Video call' : 'Voice call')}</b>
-        <small>{controls.callStatus} · {Object.keys(controls.streams).length + 1} participant{Object.keys(controls.streams).length ? 's' : ''}</small>
+        <small>{controls.callStatus} · {remoteCount + 1} participant{remoteCount ? 's' : ''}</small>
       </div>
       <span className="call-type-pill">{call.video ? <Video size={13} /> : <Headphones size={13} />}{call.video ? 'VIDEO CALL' : 'VOICE CALL'}</span>
       <button type="button" className="call-header-icon" onClick={() => setMinimized(true)} aria-label="Minimize call"><Minimize2 /></button>
@@ -93,8 +94,10 @@ export default function CallWindow({ call, user, ws, onEnd, onEnableSound }) {
     {chatOpen && <InCallChat ws={ws} chatId={call.chatId} user={user} room={call.room} />}
     <CallControls muted={controls.muted} cameraOff={controls.cameraOff} sharingScreen={controls.sharingScreen}
       video={call.video} audioLevel={controls.levels.local || 0} devices={controls.devices}
+      canShareScreen={controls.canShareScreen}
       selectedDevices={controls.selectedDevices} onMute={controls.toggleMute} onCamera={controls.toggleCamera}
-      onScreenShare={controls.toggleScreenShare} onChat={() => setChatOpen(open => !open)} chatOpen={chatOpen}
+      onScreenShare={controls.toggleScreenShare} onSwitchCamera={controls.switchCamera}
+      onChat={() => setChatOpen(open => !open)} chatOpen={chatOpen}
       onSelectDevice={controls.selectDevice} onMinimize={() => setMinimized(true)} onEnd={onEnd} />
   </div>;
 }

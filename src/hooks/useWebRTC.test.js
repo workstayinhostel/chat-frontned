@@ -1,6 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isCallSignalingError } from './useWebRTC.js';
+import { isCallSignalingError, shouldRetryCallJoin } from './useWebRTC.js';
+
+test('retries transient call invitation ordering errors for the active room', () => {
+  assert.equal(shouldRetryCallJoin({
+    t: 'error',
+    eventType: 'call-join',
+    room: 'room-a',
+    error: 'Call invite required'
+  }, 'room-a'), true);
+  assert.equal(shouldRetryCallJoin({
+    t: 'error',
+    error: 'Call invite required'
+  }, 'room-a'), true);
+  assert.equal(shouldRetryCallJoin({
+    t: 'error',
+    eventType: 'call-join',
+    room: 'room-b',
+    error: 'Call invite required'
+  }, 'room-a'), false);
+  assert.equal(shouldRetryCallJoin({
+    t: 'error',
+    eventType: 'call-join',
+    room: 'room-a',
+    error: 'Not authorized'
+  }, 'room-a'), false);
+});
 
 test('routes a matching call join rejection to the call UI', () => {
   assert.equal(isCallSignalingError({

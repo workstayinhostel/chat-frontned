@@ -268,6 +268,7 @@ export function SettingsDrawer({ user, setUser, logout, close, activeChat, messa
       </div>
       <section className="account-section">
         <div className="account-section-heading"><b>Profile</b><small>How people see you</small></div>
+        <small className="account-photo-hint">Chat photos are optimized before upload and kept under 500 KB.</small>
         <div className="account-photo-control">
           <button type="button" onClick={() => photoInput.current?.click()} disabled={photoUploading}>
             {photoUploading ? 'Uploading…' : 'Change profile photo'}
@@ -384,7 +385,7 @@ export function ChatInput({ value, onChange, onSubmit, onUpload, onRecord, recor
       <button type="submit" className="send-button" style={{ background: accent }} aria-label={editing ? 'Save message' : 'Send message'}>{editing ? '✓' : '🚀'}</button>
     </div>
     {mediaError && <p role="alert" className="media-error">{mediaError}</p>}
-    <small className="composer-hint">Enter to send · Shift+Enter for a new line <span>·</span> Photos compressed to 500 KB</small>
+    <small className="composer-hint">Enter to send · Shift+Enter for a new line</small>
   </form>;
 }
 
@@ -661,7 +662,9 @@ export default function Chat({ user, setUser, logout }) {
   const playSound = (name, loop = false) => {
     const isRingtone = name === 'callIncoming' || name === 'callOutgoing';
     if (isRingtone) {
-      stopSound(name === 'callIncoming' ? 'callOutgoing' : 'callIncoming');
+      if (ringingSoundRef.current && ringingSoundRef.current !== name) {
+        stopSound(ringingSoundRef.current);
+      }
       ringingSoundRef.current = name;
     } else if (ringingSoundRef.current) {
       return;
@@ -1088,9 +1091,9 @@ export default function Chat({ user, setUser, logout }) {
     if (!inv) return;
     setCallSetupError('');
     enableSounds('callIncoming', true);
+    stopSound('callIncoming');
     try {
       const localStream = await requestCallMedia(inv.video);
-      stopSound('callIncoming');
       const caller = chats.users.find(contact => contact.id === inv.from);
       const activeChat = inv.group
         ? chats.groups.find(group => group.id === inv.group)
@@ -1114,6 +1117,7 @@ export default function Chat({ user, setUser, logout }) {
       setInv(null);
     } catch (error) {
       setCallSetupError(error.message);
+      if (incomingCallRef.current?.room === inv.room) playSound('callIncoming', true);
     }
   };
   const allChats = [...chats.groups, ...chats.users];
