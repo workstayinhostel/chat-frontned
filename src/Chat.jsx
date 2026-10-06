@@ -679,7 +679,8 @@ export default function Chat({ user, setUser, logout }) {
       return;
     }
     const pending = soundPending.current;
-    const targetName = pending?.name || soundName || 'messageSent';
+    const requestedSound = typeof soundName === 'string' ? soundName : undefined;
+    const targetName = pending?.name || requestedSound || 'messageSent';
     const target = sounds[targetName];
     if (!target) {
       setSoundError('Audio could not be initialized. Reload Metufy and try again.');
@@ -703,7 +704,7 @@ export default function Chat({ user, setUser, logout }) {
       });
 
       target.muted = false;
-      target.volume = pending || soundName ? 1 : 0.2;
+      target.volume = pending || requestedSound ? 1 : 0.2;
       target.loop = pending?.loop ?? loop;
       target.currentTime = 0;
       const playback = target.play();
@@ -1116,7 +1117,7 @@ export default function Chat({ user, setUser, logout }) {
         <span>Tap once to allow message and call audio on this device.</span>
       </div>}
       {soundError && <span className="sound-enable-error" role="alert">{soundError}</span>}
-      <button type="button" onClick={enableSounds}>Enable sounds</button>
+      <button type="button" onClick={() => enableSounds()}>Enable sounds</button>
       {!soundPromptDismissed && <button type="button" className="sound-enable-dismiss" onClick={() => setSoundPromptDismissed(true)}>Not now</button>}
     </aside>}
     {callSetupError && !call && <div className="call-setup-error" role="alert"><span>{callSetupError}</span><button onClick={() => setCallSetupError('')} aria-label="Dismiss">×</button></div>}
@@ -1126,7 +1127,7 @@ export default function Chat({ user, setUser, logout }) {
         <span className="incoming-call-kicker">INCOMING {inv.video ? 'VIDEO' : 'VOICE'} CALL</span>
         <h2 id="incoming-call-title">{inv.fromName || 'Metufy contact'}</h2>
         <p>{inv.video ? 'Video call · microphone and camera access' : 'Voice call · microphone access'}</p>
-        {!soundReady && <button className="incoming-sound-enable" onClick={enableSounds}>Enable call sounds</button>}
+        {!soundReady && <button className="incoming-sound-enable" onClick={() => enableSounds('callIncoming', true)}>Enable call sounds</button>}
         {soundError && <p className="incoming-call-error" role="alert">{soundError}</p>}
         {callSetupError && <p className="incoming-call-error" role="alert">{callSetupError}</p>}
         <div className="incoming-call-actions">
