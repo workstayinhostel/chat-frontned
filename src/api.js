@@ -1,4 +1,5 @@
-const B = import.meta.env.VITE_API || 'https://chat-backend-m43q.onrender.com';
+const env = import.meta.env || {};
+export const API_BASE_URL = (env.VITE_API_URL || env.VITE_API || 'https://chat-backend-m43q.onrender.com').replace(/\/+$/, '');
 // JWT lives in sessionStorage only; messages are held in memory and never written to client storage.
 export const tok = () => sessionStorage.getItem('t');
 export function makeId() {
@@ -14,8 +15,19 @@ export function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 export async function api(p, o = {}) {
-  const fd = o.body instanceof FormData;
-  const r = await fetch(B + '/api' + p, { ...o, headers: { ...(fd ? {} : { 'Content-Type': 'application/json' }), Authorization: 'Bearer ' + tok() }, body: o.body && !fd ? JSON.stringify(o.body) : o.body });
+  const { body, headers = {}, ...options } = o;
+  const fd = body instanceof FormData;
+  const token = tok();
+  const r = await fetch(API_BASE_URL + '/api' + p, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      ...(fd ? {} : { 'Content-Type': 'application/json' }),
+      ...headers,
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: body && !fd ? JSON.stringify(body) : body
+  });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     if (r.status === 401 && tok()) window.dispatchEvent(new Event('auth-expired'));
@@ -24,8 +36,10 @@ export async function api(p, o = {}) {
   return j;
 }
 export async function loadMedia(id) {
-  const r = await fetch(`${B}/api/media/${encodeURIComponent(id)}`, {
-    headers: { Authorization: 'Bearer ' + tok() }
+  const token = tok();
+  const r = await fetch(`${API_BASE_URL}/api/media/${encodeURIComponent(id)}`, {
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
   });
   if (!r.ok) {
     const result = await r.json().catch(() => ({}));
@@ -34,18 +48,31 @@ export async function loadMedia(id) {
   return r.blob();
 }
 export function connect() {
-  let ws, dead = false;
+  let ws, dead = false, reconnectTimer, reconnectDelay = 1000;
   const subs = new Set(), queuedMessages = [];
+  const canQueue = event => event.type === 'SEND_MESSAGE' || event.t === 'msg';
   const open = () => {
-    ws = new WebSocket(`${B.replace('http', 'ws')}/ws?token=${tok()}`);
+    if (dead) return;
+    const wsUrl = new URL(`${API_BASE_URL}/ws`);
+    wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(wsUrl);
     ws.onopen = () => {
+      reconnectDelay = 1000;
       while (queuedMessages.length && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(queuedMessages.shift()));
       }
       subs.forEach(f => f({ t: 'ready' }));
     };
-    ws.onmessage = e => subs.forEach(f => f(JSON.parse(e.data)));
-    ws.onclose = () => !dead && setTimeout(open, 1500);
+    ws.onmessage = e => {
+      const event = JSON.parse(e.data);
+      subs.forEach(f => f(event));
+    };
+    ws.onclose = () => {
+      if (dead) return;
+      subs.forEach(listener => listener({ t: 'reconnecting' }));
+      reconnectTimer = setTimeout(open, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+    };
   };
   open();
   return {
@@ -56,18 +83,23 @@ export function connect() {
           ws.send(JSON.stringify(o));
           return true;
         } catch (error) {
-          if (o.t !== 'msg') throw error;
+          if (!canQueue(o)) throw error;
           queuedMessages.push(o);
           return true;
         }
       }
-      if (o.t === 'msg') {
+      if (canQueue(o)) {
         queuedMessages.push(o);
         return true;
       }
       return false;
     },
     sub: f => (subs.add(f), () => subs.delete(f)),
-    close: () => { dead = true; queuedMessages.length = 0; ws.close(); }
+    close: () => {
+      dead = true;
+      clearTimeout(reconnectTimer);
+      queuedMessages.length = 0;
+      ws.close();
+    }
   };
 }

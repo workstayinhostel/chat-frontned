@@ -29,7 +29,7 @@ export default function Call({ ws, room, video, localStream, onEnd }) {
     const connection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
     localStream.getTracks().forEach(track => connection.addTrack(track, localStream));
     connection.onicecandidate = event => {
-      if (event.candidate && !ws.send({ t: 'sig', to: id, room, d: { ice: event.candidate } })) {
+      if (event.candidate && !ws.send({ type: 'WEBRTC_SIGNAL', to: id, room, signal: { ice: event.candidate } })) {
         setCallError('Call connection was interrupted. Please hang up and try again.');
       }
     };
@@ -65,34 +65,35 @@ export default function Call({ ws, room, video, localStream, onEnd }) {
       if (localVideo.current) localVideo.current.srcObject = localStream;
       off = ws.sub(async event => {
         if (event.room !== room) return;
+        const signal = event.type === 'WEBRTC_SIGNAL' ? event.signal : event.d;
         try {
           if (event.t === 'call-peers') {
             for (const id of event.ids) {
               const peer = peers.current[id] || createPeer(id);
               const offer = await peer.createOffer();
               await peer.setLocalDescription(offer);
-              if (!ws.send({ t: 'sig', to: id, room, d: { sdp: peer.localDescription } })) {
+              if (!ws.send({ type: 'WEBRTC_SIGNAL', to: id, room, signal: { sdp: peer.localDescription } })) {
                 setCallError('Call connection was interrupted. Please hang up and try again.');
               }
             }
-          } else if (event.t === 'sig') {
+          } else if (event.type === 'WEBRTC_SIGNAL' || event.t === 'sig') {
             const peer = peers.current[event.from] || createPeer(event.from);
-            if (event.d.sdp) {
-              await peer.setRemoteDescription(event.d.sdp);
+            if (signal.sdp) {
+              await peer.setRemoteDescription(signal.sdp);
               for (const candidate of pendingIce.current[event.from] || []) {
                 await peer.addIceCandidate(candidate);
               }
               pendingIce.current[event.from] = [];
-              if (event.d.sdp.type === 'offer') {
+              if (signal.sdp.type === 'offer') {
                 const answer = await peer.createAnswer();
                 await peer.setLocalDescription(answer);
-                if (!ws.send({ t: 'sig', to: event.from, room, d: { sdp: peer.localDescription } })) {
+                if (!ws.send({ type: 'WEBRTC_SIGNAL', to: event.from, room, signal: { sdp: peer.localDescription } })) {
                   setCallError('Call connection was interrupted. Please hang up and try again.');
                 }
               }
-            } else if (event.d.ice) {
-              if (peer.remoteDescription) await peer.addIceCandidate(event.d.ice);
-              else pendingIce.current[event.from].push(event.d.ice);
+            } else if (signal.ice) {
+              if (peer.remoteDescription) await peer.addIceCandidate(signal.ice);
+              else pendingIce.current[event.from].push(signal.ice);
             }
           } else if (event.t === 'call-joined') {
             setCallStatus('Ringing…');

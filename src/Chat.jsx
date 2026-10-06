@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from 'react'; import { api, connect, loadMedia, makeId } from './api'; import Call from './Call';
+import { useEffect, useRef, useState } from 'react'; import { api, loadMedia, makeId, tok } from './api'; import Call from './Call';
+import { clearUnreadCount, conversationKey, createSendMessageEvent, eventType, markOutgoingMessagesRead, mergeMessage, normalizeMessage } from './chatEvents';
+import { compressAndUploadImage } from './utils/media.js';
+import { useWebSocket } from './hooks/useWebSocket.js';
+import { glassStyle, useTheme } from './context/ThemeContext.jsx';
 import { createPortal } from 'react-dom';
 import messageSentSound from './assets/messagesent.mp3';
 import messageReceivedSound from './assets/messagecome.mp3';
@@ -12,15 +16,42 @@ const tick = status => status === 'sending'
     ? <span className="message-status-tick" title="Sent" aria-label="Sent">✓</span>
     : <span className={`message-status-tick ${status === 'seen' ? 'message-status-seen' : ''}`}
       title={status === 'seen' ? 'Seen' : 'Delivered'} aria-label={status === 'seen' ? 'Seen' : 'Delivered'}>✓✓</span>;
+const relativeLastSeen = value => {
+  const elapsed = Math.max(0, Date.now() - new Date(value).getTime());
+  if (elapsed < 60_000) return 'just now';
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
+  return new Date(value).toLocaleDateString();
+};
 const Modal = ({ children }) => <div className="fixed inset-0 z-40 grid place-items-center bg-black/60"><div className="w-80 space-y-3 rounded-2xl bg-slate-900 p-5 text-slate-100">{children}</div></div>;
 const inp = 'w-full rounded-lg bg-slate-800 px-3 py-2 outline-none';
 
-function MediaAttachment({ id, kind }) {
+export function ChatLayout({ children, className = '', style }) {
+  return <main className={`chat-app ${className}`} style={style}>{children}</main>;
+}
+
+export function ChatList({ children, className = '', style }) {
+  return <aside className={className} style={style}>{children}</aside>;
+}
+
+function Avatar({ url, label, className, style }) {
+  return <span className={className} style={style}>
+    {url ? <img src={url} alt="" /> : label?.[0]?.toUpperCase() || '?'}
+  </span>;
+}
+
+function MediaAttachment({ id, kind, mediaUrl }) {
   const [url, setUrl] = useState('');
   const [error, setError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   useEffect(() => {
     let live = true, objectUrl;
+    if (mediaUrl) {
+      setUrl(mediaUrl);
+      setError('');
+      return () => { live = false; };
+    }
     loadMedia(id).then(blob => {
       if (!live) return;
       objectUrl = URL.createObjectURL(blob);
@@ -32,16 +63,22 @@ function MediaAttachment({ id, kind }) {
       live = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [id]);
+  }, [id, mediaUrl]);
   if (error) return <span role="alert" className="text-sm text-red-300">{error}</span>;
   if (!url) return <span className="text-sm opacity-60">Loading attachment…</span>;
   return kind === 'image'
     ? <div className="media-image">
-      <img src={url} alt="Shared attachment" className="h-auto max-h-80 max-w-full rounded-lg object-contain" />
+      <button type="button" className="media-preview-button" onClick={() => setLightboxOpen(true)} aria-label="Open shared photo">
+        <img src={url} alt="Shared attachment" className="h-auto max-h-80 max-w-full rounded-lg object-contain" />
+      </button>
       <button className="media-menu-trigger" aria-label="Photo options" aria-expanded={menuOpen} onClick={() => setMenuOpen(open => !open)}>•••</button>
       {menuOpen && <div className="media-menu">
         <a href={url} download={`metufy-photo-${id}`}>↓ <span>Download photo</span></a>
       </div>}
+      {lightboxOpen && createPortal(<div className="photo-lightbox" role="dialog" aria-modal="true" aria-label="Shared photo" onClick={() => setLightboxOpen(false)}>
+        <button type="button" aria-label="Close photo" onClick={() => setLightboxOpen(false)}>×</button>
+        <img src={url} alt="Shared attachment full size" />
+      </div>, document.body)}
     </div>
     : <VoiceMessage url={url} />;
 }
@@ -146,15 +183,17 @@ function MessageItem({ message, previous, next, currentUserId, senderLabel, dark
         }}><span className="message-menu-dots">•••</span></button>}
       {!groupedBefore && senderLabel && <small className="message-author">{senderLabel}</small>}
       {message.deleted ? <i className="opacity-60">{message.text}</i>
-        : message.kind === 'image' || message.kind === 'audio' ? <MediaAttachment id={message.text} kind={message.kind} />
+        : message.kind === 'image' || message.kind === 'audio' ? <MediaAttachment id={message.text} kind={message.kind} mediaUrl={message.mediaUrl} />
           : <><span className="whitespace-pre-wrap break-words">{message.text}</span>
             {mine && <span className="message-inline-status">
               {message.edited && <small>(edited)</small>}
               {tick(message.status)}
             </span>}
           </>}
-      {(message.kind === 'image' || message.kind === 'audio') && mine && !message.deleted &&
-        <div className="message-meta">{tick(message.status)}</div>}
+      {!message.deleted && <div className="message-meta">
+        <time dateTime={new Date(message.at).toISOString()}>{new Date(message.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
+        {(message.kind === 'image' || message.kind === 'audio') && mine && tick(message.status)}
+      </div>}
     </div>
   </div>;
 }
@@ -177,10 +216,37 @@ function CallLogItem({ call, currentUserId, group }) {
   </div>;
 }
 
-function AccountPage({ user, setUser, logout, close }) {
-  const [f, setF] = useState({ displayName: user.displayName, activeStatus: user.activeStatus, theme: user.theme });
+export function SettingsDrawer({ user, setUser, logout, close, activeChat, messages = [], onProfileUpdate }) {
+  const [f, setF] = useState({ displayName: user.displayName, activeStatus: user.activeStatus, theme: user.theme, avatarUrl: user.avatarUrl });
   const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState(false), [photoUploading, setPhotoUploading] = useState(false), [photoProgress, setPhotoProgress] = useState('');
+  const { theme, setStyle, setBlur, setOpacity } = useTheme();
+  const photoInput = useRef(null);
+  const uploadPhoto = async file => {
+    setPhotoUploading(true);
+    setError('');
+    try {
+      const uploaded = await compressAndUploadImage(file, undefined, 'avatars', {
+        authToken: tok(),
+        onProgress: setPhotoProgress
+      });
+      setUser(current => ({ ...current, avatarUrl: uploaded.mediaUrl }));
+      setF(current => ({ ...current, avatarUrl: uploaded.mediaUrl }));
+      setPhotoProgress('Profile photo updated');
+      onProfileUpdate?.();
+      try {
+        const refreshed = await api('/me');
+        setUser({ ...refreshed, avatarUrl: uploaded.mediaUrl });
+      } catch (refreshError) {
+        setError(`Photo uploaded, but the profile could not be refreshed: ${refreshError.message}`);
+      }
+    } catch (uploadError) {
+      setError(uploadError.message);
+      setPhotoProgress('');
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
   const save = async () => {
     setSaving(true);
     try {
@@ -192,29 +258,58 @@ function AccountPage({ user, setUser, logout, close }) {
       setSaving(false);
     }
   };
-  return <main className="account-page">
+  return <aside className="account-page settings-drawer">
     <header className="account-header"><button onClick={close} aria-label="Back to chats">←</button><div><b>Account</b><small>Manage your profile and preferences</small></div></header>
     <section className="account-content">
       <div className="account-profile-card">
-        <span className="account-avatar" style={{ background: f.theme.accent }}>{f.displayName?.[0]?.toUpperCase() || '?'}</span>
+        <Avatar url={f.avatarUrl} label={f.displayName} className="account-avatar" style={{ background: f.theme.accent }} />
         <div><h1>{f.displayName}</h1><p>@{user.username}</p><small><i /> Metufy account</small></div>
       </div>
       <section className="account-section">
         <div className="account-section-heading"><b>Profile</b><small>How people see you</small></div>
+        <div className="account-photo-control">
+          <button type="button" onClick={() => photoInput.current?.click()} disabled={photoUploading}>
+            {photoUploading ? 'Uploading…' : 'Change profile photo'}
+          </button>
+          <input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden
+            onChange={event => {
+              const file = event.target.files?.[0];
+              if (file) uploadPhoto(file);
+              event.target.value = '';
+            }} />
+          {photoProgress && <small role="status">{photoProgress}</small>}
+        </div>
         <label className="account-input"><span>Display name</span><input value={f.displayName} onChange={e => setF({ ...f, displayName: e.target.value })} maxLength={40} /></label>
         <div className="account-input account-username"><span>Username <small>can’t be changed</small></span><b>@{user.username}</b></div>
       </section>
       <section className="account-section">
         <div className="account-section-heading"><b>Privacy & appearance</b><small>Set your availability and look</small></div>
+        <label className="account-setting-row"><span><b>Glassmorphism</b><small>Liquid glass or standard slate</small></span><select value={theme.style} onChange={event => setStyle(event.target.value)}><option value="standard">Standard</option><option value="glass">Liquid Glass</option></select></label>
+        {theme.style === 'glass' && <>
+          <label className="account-setting-row"><span><b>Glass blur</b><small>{theme.blur}px</small></span><input type="range" min="0" max="24" value={theme.blur} onChange={event => setBlur(event.target.value)} /></label>
+          <label className="account-setting-row"><span><b>Surface opacity</b><small>{theme.opacity}%</small></span><input type="range" min="10" max="60" value={theme.opacity} onChange={event => setOpacity(event.target.value)} /></label>
+        </>}
         <label className="account-setting-row"><span><b>Active status</b><small>Let your contacts know when you’re online</small></span><input type="checkbox" checked={f.activeStatus} onChange={e => setF({ ...f, activeStatus: e.target.checked })} /></label>
         <label className="account-setting-row"><span><b>Theme</b><small>Choose your chat appearance</small></span><select value={f.theme.wallpaper} onChange={e => setF({ ...f, theme: { ...f.theme, wallpaper: e.target.value } })}><option value="dark">Dark</option><option value="light">Light</option></select></label>
         <label className="account-setting-row"><span><b>Accent color</b><small>Personalize your chat controls</small></span><input type="color" value={f.theme.accent} onChange={e => setF({ ...f, theme: { ...f.theme, accent: e.target.value } })} /></label>
       </section>
+      {activeChat && <section className="account-section">
+        <div className="account-section-heading"><b>{activeChat.name || activeChat.displayName}</b><small>Conversation details</small></div>
+        {activeChat.members && <div className="details-members">{activeChat.members.map(member =>
+          <span key={member.id}><Avatar url={member.avatarUrl} label={member.displayName} className="conversation-avatar" /><b>{member.displayName}</b></span>
+        )}</div>}
+        <div className="details-media-gallery">
+          {messages.filter(message => message.kind === 'image' && !message.deleted && message.mediaUrl).map(message =>
+            <img key={message.id} src={message.mediaUrl} alt="Shared photo" />
+          )}
+        </div>
+        {!messages.some(message => message.kind === 'image' && !message.deleted) && <small className="account-photo-hint">No shared photos yet.</small>}
+      </section>}
       {error && <p role="alert" className="account-error">{error}</p>}
       <button className="account-save" onClick={save} disabled={saving}>{saving ? 'Saving changes…' : 'Save changes'}</button>
       <button className="account-logout" onClick={logout}>Log out of Metufy</button>
     </section>
-  </main>;
+  </aside>;
 }
 function NewGroup({ close, done }) {
   const [n, setN] = useState(''), [u, setU] = useState('');
@@ -253,23 +348,79 @@ function NewGroup({ close, done }) {
   </div>;
 }
 
-function Room({ act, user, list, callLogs, ws, online, typing, dark, ac, onCall, onBack, onPending, onSendFailure, error }) {
-  const [t, setT] = useState(''), [edit, setEdit] = useState(null), [rec, setRec] = useState(null), [uploads, setUploads] = useState(0), [mediaError, setMediaError] = useState(''), [messageMenu, setMessageMenu] = useState(null), [deleteMessage, setDeleteMessage] = useState(null), end = useRef(), lt = useRef(0), seenSent = useRef(new Set());
+export function ChatInput({ value, onChange, onSubmit, onUpload, onRecord, recording, editing, uploads, uploadStatus, mediaError, accent }) {
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const textarea = useRef(null);
+  useEffect(() => {
+    if (!textarea.current) return;
+    textarea.current.style.height = 'auto';
+    textarea.current.style.height = `${Math.min(textarea.current.scrollHeight, 144)}px`;
+  }, [value]);
+  const appendEmoji = emoji => {
+    onChange(`${value}${emoji}`);
+    setEmojiOpen(false);
+  };
+  return <form className="composer-wrap" onSubmit={onSubmit}>
+    <div className="composer">
+      <div className="emoji-picker-wrap">
+        <button type="button" className="composer-tool" onClick={() => setEmojiOpen(open => !open)} aria-label="Open emoji picker" aria-expanded={emojiOpen}>☺</button>
+        {emojiOpen && <div className="emoji-picker" role="group" aria-label="Choose an emoji">
+          {['😊', '❤️', '😂', '👍', '🎉', '🙏'].map(emoji => <button key={emoji} type="button" onClick={() => appendEmoji(emoji)}>{emoji}</button>)}
+        </div>}
+      </div>
+      <label className="composer-tool" title="Attach a photo" aria-label="Attach a photo">📎<input type="file" accept="image/jpeg,image/png,image/webp,image/avif" hidden onChange={event => { const file = event.target.files?.[0]; if (file) onUpload(file); event.target.value = ''; }} /></label>
+      <textarea ref={textarea} value={value} onChange={event => onChange(event.target.value)} onInput={event => {
+        event.currentTarget.style.height = 'auto';
+        event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 144)}px`;
+      }} onKeyDown={event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          onSubmit(event);
+        }
+      }} rows={1} placeholder={editing ? 'Edit message…' : 'Write a message…'} aria-label="Message" enterKeyHint="send" autoComplete="off" />
+      {!!uploads && <span role="status" className="uploading"><i />{uploadStatus || 'Uploading…'}</span>}
+      <button type="button" onClick={onRecord} className={`composer-tool ${recording ? 'recording' : ''}`} aria-label={recording ? 'Stop voice recording' : 'Record voice message'}>{recording ? '■' : '♬'}</button>
+      <button type="submit" className="send-button" style={{ background: accent }} aria-label={editing ? 'Save message' : 'Send message'}>{editing ? '✓' : '🚀'}</button>
+    </div>
+    {mediaError && <p role="alert" className="media-error">{mediaError}</p>}
+    <small className="composer-hint">Enter to send · Shift+Enter for a new line <span>·</span> Photos compressed to 500 KB</small>
+  </form>;
+}
+
+export function MessageThread({ act, user, list, callLogs, ws, online, lastSeen, typing, dark, ac, onCall, onBack, onPending, onSendFailure, onMarkRead, onToggleDetails, error }) {
+  const [t, setT] = useState(''), [edit, setEdit] = useState(null), [rec, setRec] = useState(null), [uploads, setUploads] = useState(0), [uploadStatus, setUploadStatus] = useState(''), [mediaError, setMediaError] = useState(''), [messageMenu, setMessageMenu] = useState(null), [deleteMessage, setDeleteMessage] = useState(null), [dragging, setDragging] = useState(false), end = useRef(), lt = useRef(0), seenSent = useRef(new Set());
+  const sendRead = () => {
+    if (document.visibilityState !== 'visible' || !document.hasFocus()) return false;
+    if (!ws.send({ type: 'MARK_READ', chatId: act.chatId || act.id })) return false;
+    onMarkRead(act.chatId || act.id);
+    return true;
+  };
   const sendSeen = () => {
     if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
     const unread = list.filter(message => message.from !== user.id && message.status !== 'seen' && !seenSent.current.has(message.id));
     if (!unread.length) return;
-    if (ws.send(g ? { t: 'seen', group: act.id } : { t: 'seen', chat: act.id })) {
+    if (sendRead()) {
       unread.forEach(message => seenSent.current.add(message.id));
     }
   };
   useEffect(() => {
     end.current?.scrollIntoView();
     sendSeen();
-  }, [list, act.id]);
+  }, [list]);
   useEffect(() => {
-    const onVisibility = () => { if (document.visibilityState === 'visible') sendSeen(); };
-    const onFocus = () => sendSeen();
+    sendRead();
+  }, [act.id, act.chatId]);
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        sendRead();
+        sendSeen();
+      }
+    };
+    const onFocus = () => {
+      sendRead();
+      sendSeen();
+    };
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('focus', onFocus);
     return () => {
@@ -327,7 +478,7 @@ function Room({ act, user, list, callLogs, ws, online, typing, dark, ac, onCall,
     : g
       ? act.members?.find(member => member.id === id)?.username
       : act.username;
-  const send = (text, kind = 'text') => {
+  const send = (text, kind = 'text', mediaUrl) => {
     const clientId = makeId();
     onPending({
       id: `pending:${clientId}`,
@@ -336,10 +487,20 @@ function Room({ act, user, list, callLogs, ws, online, typing, dark, ac, onCall,
       ...tgt,
       kind,
       text,
+      mediaUrl,
       at: new Date().toISOString(),
       status: 'sending'
     });
-    if (!ws.send({ t: 'msg', clientId, kind, text, ...tgt })) {
+    const event = kind === 'audio'
+      ? { t: 'msg', clientId, kind, text, ...tgt }
+      : createSendMessageEvent({
+        chatId: act.chatId || act.id,
+        clientId,
+        kind,
+        content: text,
+        mediaUrl
+      });
+    if (!ws.send(event)) {
       onSendFailure(clientId, 'Message not sent. Check your connection and try again.');
     }
   };
@@ -355,19 +516,30 @@ function Room({ act, user, list, callLogs, ws, online, typing, dark, ac, onCall,
     setT('');
   };
   const upload = async (blob, kind) => {
-    if (blob.size > 15 * 1024 * 1024) {
-      alert('Attachments must be 15 MB or smaller.');
+    setMediaError('');
+    if (kind === 'audio' && blob.size > 15 * 1024 * 1024) {
+      setMediaError('Voice messages must be 15 MB or smaller.');
       return;
     }
     setUploads(n => n + 1);
     try {
-      const fd = new FormData();
-      fd.append('file', blob, 'f');
-      send((await api('/upload', { method: 'POST', body: fd })).id, kind);
-    } catch (e) {
-      alert(e.message);
+      if (kind === 'image') {
+        const uploaded = await compressAndUploadImage(blob, undefined, 'chat-media', {
+          authToken: tok(),
+          onProgress: setUploadStatus
+        });
+        send(uploaded.mediaUrl, 'image', uploaded.mediaUrl);
+      } else {
+        setUploadStatus('Uploading voice message…');
+        const fd = new FormData();
+        fd.append('file', blob, 'voice-message');
+        send((await api('/upload', { method: 'POST', body: fd })).id, kind);
+      }
+    } catch (uploadError) {
+      setMediaError(uploadError.message);
     } finally {
       setUploads(n => n - 1);
+      if (uploads <= 1) setUploadStatus('');
     }
   };
   const record = async () => {
@@ -399,14 +571,15 @@ function Room({ act, user, list, callLogs, ws, online, typing, dark, ac, onCall,
     }
   };
   const type = e => { setT(e.target.value); if (Date.now() - lt.current > 1200) { lt.current = Date.now(); ws.send({ t: 'typing', ...tgt }); } };
-  return <section className="chat-room">
+  return <section className="chat-room" onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false); }} onDrop={event => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files?.[0]; if (file) upload(file, 'image'); }}>
     <header className="chat-header">
       <button className="chat-back-button" type="button" onClick={onBack} aria-label="Back to chats">
         <span aria-hidden="true">←</span>
       </button>
-      <span className="chat-contact-avatar" style={{ background: ac }}>{name?.[0]?.toUpperCase() || '?'}</span>
-      <div className="chat-contact"><b>{name}</b><small>{g ? `${act.members.length} members` : `@${act.username}${online[act.id] ? ' · Active now' : ''}`}</small></div>
+      <Avatar url={!g && act.avatarUrl} label={name} className="chat-contact-avatar" style={{ background: ac }} />
+      <div className="chat-contact"><b>{name}</b><small>{g ? `${act.members.length} members` : `@${act.username}${typing[act.id] ? ' · Typing…' : online[act.id] ? ' · Online' : lastSeen[act.id] ? ` · Last seen ${relativeLastSeen(lastSeen[act.id])}` : ' · Offline'}`}</small></div>
       <div className="chat-actions">
+        <button onClick={onToggleDetails} aria-label="Toggle conversation details" title="Conversation details"><span>ⓘ</span></button>
         <button onClick={() => onCall(false)} aria-label="Start voice call" title="Voice call"><span>☎</span><small>Call</small></button>
         <button onClick={() => onCall(true)} aria-label="Start video call" title="Video call"><span>▣</span><small>Video</small></button>
       </div>
@@ -441,26 +614,22 @@ function Room({ act, user, list, callLogs, ws, online, typing, dark, ac, onCall,
         </div>
       </section>
     </div>, document.body)}
-    <form className="composer-wrap" onSubmit={submit}>
-      {typing[act.id] && <div className="typing-status"><i /><span>{g ? who(typing[act.id]) : name} is typing</span><b>···</b></div>}
-      <div className="composer">
-        <label className="composer-tool" title="Attach a photo" aria-label="Attach a photo">＋<input type="file" accept="image/*" hidden onChange={e => e.target.files[0] && upload(e.target.files[0], 'image')} /></label>
-        <input value={t} onChange={type} placeholder={edit ? 'Edit message…' : 'Write a message…'} aria-label="Message" enterKeyHint="send" autoComplete="off" />
-        {!!uploads && <span role="status" className="uploading"><i />Uploading…</span>}
-        <button type="button" onClick={record} className={`composer-tool ${rec ? 'recording' : ''}`} aria-label={rec ? 'Stop recording' : 'Record voice message'} title={rec ? 'Stop recording' : 'Record voice message'}>{rec ? '■' : '♬'}</button>
-        <button type="submit" className="send-button" style={{ background: ac }} aria-label={edit ? 'Save message' : 'Send message'}>{edit ? '✓' : '↑'}</button>
-      </div>
-      {mediaError && <p role="alert" className="media-error">{mediaError}</p>}
-      <small className="composer-hint">Enter to send <span>·</span> Photos up to 15 MB <span>·</span> Private chat</small>
-    </form></section>;
+    {typing[act.id] && <div className="typing-status"><i /><span>{g ? who(typing[act.id]) : name} is typing</span><b>···</b></div>}
+    <ChatInput value={t} onChange={value => type({ target: { value } })} onSubmit={submit} onUpload={file => upload(file, 'image')} onRecord={record} recording={!!rec} editing={edit} uploads={uploads} uploadStatus={uploadStatus} mediaError={mediaError} accent={ac} />
+    {dragging && <div className="chat-drop-overlay" role="status">Drop an image to share it</div>}
+  </section>;
 }
 
 export default function Chat({ user, setUser, logout }) {
-  const [chats, setChats] = useState({ users: [], groups: [], chats: [] }), [act, setAct] = useState(null), [msgs, setMsgs] = useState({}), [online, setOnline] = useState({}), [typing, setTyping] = useState({}), [error, setError] = useState('');
+  const [chats, setChats] = useState({ users: [], groups: [], chats: [] }), [act, setAct] = useState(null), [msgs, setMsgs] = useState({}), [online, setOnline] = useState({}), [lastSeen, setLastSeen] = useState({}), [typing, setTyping] = useState({}), [error, setError] = useState('');
   const [callLogs, setCallLogs] = useState({});
   const [q, setQ] = useState(''), [res, setRes] = useState([]), [modal, setModal] = useState(null), [call, setCall] = useState(null), [inv, setInv] = useState(null), [, setW] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(320), [themeBusy, setThemeBusy] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [chatFilter, setChatFilter] = useState('all');
+  const [pinnedChats, setPinnedChats] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(`metufy-pinned-${user.id}`) || '[]'); } catch { return []; }
+  });
   const [callSetupError, setCallSetupError] = useState('');
   const soundElements = useRef(null), soundPending = useRef(null), soundReadyRef = useRef(false), incomingCallRef = useRef(inv), activeCallRef = useRef(call), answeredCallRef = useRef(null);
   const [soundReady, setSoundReady] = useState(false);
@@ -468,16 +637,19 @@ export default function Chat({ user, setUser, logout }) {
     try { return localStorage.getItem('metufy-sounds-enabled') === 'true'; } catch { return false; }
   });
   const [soundError, setSoundError] = useState('');
-  const ws = useRef(), typingTimers = useRef(new Map()), msgsR = useRef(msgs);
+  const ws = useRef(), socket = useWebSocket(), typingTimers = useRef(new Map()), msgsR = useRef(msgs), chatsR = useRef(chats);
   const activeChatR = useRef(act);
   msgsR.current = msgs;
+  chatsR.current = chats;
   activeChatR.current = act;
   incomingCallRef.current = inv;
   activeCallRef.current = call;
   soundReadyRef.current = soundReady;
   const ac = user.theme.accent, dark = user.theme.wallpaper === 'dark';
+  const { theme: glassTheme } = useTheme();
   const stopSound = name => {
     const audio = soundElements.current?.[name];
+    if (soundPending.current?.name === name) soundPending.current = null;
     if (!audio) return;
     audio.pause();
     audio.currentTime = 0;
@@ -500,14 +672,14 @@ export default function Chat({ user, setUser, logout }) {
       console.warn(`Could not play ${name} sound:`, error);
     });
   };
-  const enableSounds = () => {
+  const enableSounds = (soundName, loop = false) => {
     const sounds = soundElements.current;
     if (!sounds) {
       setSoundError('Audio is still loading. Please try again in a moment.');
       return;
     }
     const pending = soundPending.current;
-    const targetName = pending?.name || 'messageSent';
+    const targetName = pending?.name || soundName || 'messageSent';
     const target = sounds[targetName];
     if (!target) {
       setSoundError('Audio could not be initialized. Reload Metufy and try again.');
@@ -531,8 +703,8 @@ export default function Chat({ user, setUser, logout }) {
       });
 
       target.muted = false;
-      target.volume = pending ? 1 : 0.2;
-      target.loop = pending?.loop || false;
+      target.volume = pending || soundName ? 1 : 0.2;
+      target.loop = pending?.loop ?? loop;
       target.currentTime = 0;
       const playback = target.play();
       playback.then(() => {
@@ -541,6 +713,11 @@ export default function Chat({ user, setUser, logout }) {
         setSoundPromptDismissed(true);
         setSoundError('');
         if (soundPending.current?.name === targetName) soundPending.current = null;
+        else if (soundPending.current) {
+          const queued = soundPending.current;
+          soundPending.current = null;
+          playSound(queued.name, queued.loop);
+        }
         try { localStorage.setItem('metufy-sounds-enabled', 'true'); } catch (error) {
           console.warn('Could not save audio preference:', error);
         }
@@ -585,7 +762,7 @@ export default function Chat({ user, setUser, logout }) {
       : !current.members && [user.id, current.id].sort().join(':') === event.chat;
     if (sameChat) loadCallLogs(current);
   };
-  const keyOf = m => m.group || (m.from === user.id ? m.to : m.from);
+  const keyOf = m => conversationKey(m, user.id);
   useEffect(() => {
     const sources = {
       messageSent: messageSentSound,
@@ -610,18 +787,35 @@ export default function Chat({ user, setUser, logout }) {
     };
   }, []);
   useEffect(() => {
-    load(); const w = ws.current = connect(); setW(1);
-    const retryPending = () => {
-      if (document.visibilityState !== 'visible') return;
-      Object.values(msgsR.current).flat().filter(message => message.status === 'sending').forEach(message => {
-        w.send({
+    load();
+    const w = ws.current = socket.connectionRef.current;
+    if (!w) return undefined;
+    setW(1);
+    const retryMessage = message => {
+      if (message.kind === 'audio') {
+        return w.send({
           t: 'msg',
           clientId: message.clientId,
           kind: message.kind,
           text: message.text,
           ...(message.group ? { group: message.group } : { to: message.to })
         });
-      });
+      }
+      return w.send(createSendMessageEvent({
+        chatId: message.chatId || message.group || message.to,
+        clientId: message.clientId,
+        kind: message.kind,
+        content: message.text,
+        mediaUrl: message.mediaUrl
+      }));
+    };
+    const retryPendingMessages = () => {
+      Object.values(msgsR.current).flat().filter(message => message.status === 'sending')
+        .forEach(retryMessage);
+    };
+    const retryPending = () => {
+      if (document.visibilityState !== 'visible') return;
+      retryPendingMessages();
       load();
       const current = activeChatR.current;
       if (current) {
@@ -642,41 +836,75 @@ export default function Chat({ user, setUser, logout }) {
       }
     };
     const off = w.sub(e => {
-      if (e.t === 'ready') {
-        Object.values(msgsR.current).flat().filter(message => message.status === 'sending').forEach(message => {
-          w.send({
-            t: 'msg',
-            clientId: message.clientId,
-            kind: message.kind,
-            text: message.text,
-            ...(message.group ? { group: message.group } : { to: message.to })
-          });
+      const type = eventType(e);
+      const acceptMessage = (rawMessage, clientId) => {
+        const message = normalizeMessage({
+          ...rawMessage,
+          ...(clientId && !rawMessage.clientId ? { clientId } : {})
         });
+        const existingKey = clientId && Object.entries(msgsR.current)
+          .find(([, items]) => items.some(item => item.clientId === clientId))?.[0];
+        const key = keyOf(message) || existingKey;
+        if (!key) return message;
+        setMsgs(state => ({ ...state, [key]: mergeMessage(state[key] || [], message) }));
+        return message;
+      };
+      if (type === 'ready') {
+        retryPendingMessages();
+        const current = activeChatR.current;
+        if (current && document.visibilityState === 'visible' && document.hasFocus()) {
+          w.send({ type: 'MARK_READ', chatId: current.chatId || current.id });
+          setChats(state => clearUnreadCount(state, current.chatId || current.id));
+        }
       }
       if (e.t === 'online') setOnline(Object.fromEntries(e.ids.map(i => [i, true])));
-      if (e.t === 'presence') setOnline(o => ({ ...o, [e.id]: e.on }));
-      if (e.t === 'msg') {
-        const k = keyOf(e.m); setMsgs(s => ({ ...s, [k]: [...(s[k] || []).filter(x => x.id !== e.m.id), e.m] }));
-        if (e.m.from !== user.id) {
+      if (type === 'PRESENCE' || e.t === 'presence') {
+        const id = e.userId || e.id;
+        const isOnline = e.status ? e.status === 'ONLINE' : e.on;
+        setOnline(current => ({ ...current, [id]: isOnline }));
+        if (e.lastSeenAt) setLastSeen(current => ({ ...current, [id]: e.lastSeenAt }));
+      }
+      if (type === 'MESSAGE' || e.t === 'msg') {
+        const message = acceptMessage(type === 'MESSAGE' ? e.message : e.m);
+        if (message.from !== user.id) {
           playSound('messageReceived');
-          w.send({ t: 'delivered', id: e.m.id });
+          w.send({ t: 'delivered', id: message.id });
           load();
         }
       }
-      if (e.t === 'stored') {
-        const k = keyOf(e.m);
-        setMsgs(s => ({ ...s, [k]: [...(s[k] || []).filter(x => x.clientId !== e.clientId && x.id !== e.m.id), e.m] }));
+      if (type === 'SEND_MESSAGE_ACK' || e.t === 'stored') {
+        const message = acceptMessage(type === 'SEND_MESSAGE_ACK' ? e.message : e.m, e.clientId);
         playSound('messageSent');
+        if (e.message?.chatId) {
+          const conversationId = keyOf(message);
+          setChats(state => ({
+            ...state,
+            chats: state.chats.map(chat => chat.id === conversationId ? { ...chat, chatId: e.message.chatId } : chat)
+          }));
+          setAct(current => current?.id === conversationId
+            ? { ...current, chatId: e.message.chatId }
+            : current);
+        }
         load();
       }
-      if (e.t === 'upd') setMsgs(s => { const k = keyOf(e.m); return { ...s, [k]: (s[k] || []).map(x => x.id === e.m.id ? e.m : x) }; });
+      if (e.t === 'upd') {
+        const message = normalizeMessage(e.m);
+        const key = keyOf(message);
+        setMsgs(state => ({ ...state, [key]: (state[key] || []).map(item => item.id === message.id ? message : item) }));
+      }
+      if (type === 'MESSAGES_READ') {
+        const chat = chatsR.current.chats.find(item => item.chatId === e.chatId);
+        const current = activeChatR.current;
+        const key = chat?.id || (current?.chatId === e.chatId ? current.id : e.userId);
+        setMsgs(state => ({ ...state, [key]: markOutgoingMessagesRead(state[key] || [], user.id, e.lastReadMessageAt) }));
+      }
       if (e.t === 'seen') {
         const k = e.group || e.by;
-        setMsgs(s => ({ ...s, [k]: (s[k] || []).map(m => m.from === user.id ? { ...m, status: 'seen' } : m) }));
+        setMsgs(s => ({ ...s, [k]: markOutgoingMessagesRead(s[k] || [], user.id) }));
         load();
       }
       if (e.t === 'delivered') setMsgs(s => ({ ...s, [e.to]: (s[e.to] || []).map(m => m.status === 'sent' ? { ...m, status: 'delivered' } : m) }));
-      if (e.t === 'typing') {
+      if (type === 'TYPING_INDICATOR' || e.t === 'typing') {
         const k = e.group || e.from;
         setTyping(t => ({ ...t, [k]: e.from }));
         clearTimeout(typingTimers.current.get(k));
@@ -689,9 +917,11 @@ export default function Chat({ user, setUser, logout }) {
       }
       if (e.t === 'call-log' || e.t === 'call-ended') refreshCallLogsForEvent(e);
       if (e.t === 'call-joined') {
-        stopSound('callOutgoing');
-        if (activeCallRef.current?.room === e.room) answeredCallRef.current = e.room;
-        playSound('callReceived');
+        if (activeCallRef.current?.room === e.room) {
+          answeredCallRef.current = e.room;
+          stopSound('callOutgoing');
+          playSound('callReceived');
+        }
         const current = activeChatR.current;
         if (current) loadCallLogs(current);
       }
@@ -721,7 +951,6 @@ export default function Chat({ user, setUser, logout }) {
     window.addEventListener('pageshow', retryPending);
     return () => {
       off();
-      w.close();
       typingTimers.current.forEach(clearTimeout);
       document.removeEventListener('visibilitychange', retryPending);
       window.removeEventListener('pageshow', retryPending);
@@ -781,7 +1010,7 @@ export default function Chat({ user, setUser, logout }) {
   };
   const startCall = async video => {
     setCallSetupError('');
-    enableSounds();
+    enableSounds('callOutgoing', true);
     let stream;
     try {
       stream = await requestCallMedia(video);
@@ -794,7 +1023,7 @@ export default function Chat({ user, setUser, logout }) {
       activeCallRef.current = activeCall;
       answeredCallRef.current = null;
       setCall(activeCall);
-      playSound('callOutgoing', true);
+      if (answeredCallRef.current !== room) playSound('callOutgoing', true);
     } catch (error) {
       stream?.getTracks().forEach(track => track.stop());
       setCallSetupError(error.message);
@@ -803,7 +1032,7 @@ export default function Chat({ user, setUser, logout }) {
   const acceptCall = async () => {
     if (!inv) return;
     setCallSetupError('');
-    enableSounds();
+    enableSounds('callIncoming', true);
     try {
       const localStream = await requestCallMedia(inv.video);
       stopSound('callIncoming');
@@ -817,16 +1046,25 @@ export default function Chat({ user, setUser, logout }) {
       setCallSetupError(error.message);
     }
   };
-  const list = [...chats.groups, ...chats.users].sort((first, second) => {
+  const allChats = [...chats.groups, ...chats.users];
+  const list = allChats.filter(conversation => {
+    if (chatFilter === 'direct') return !conversation.members;
+    if (chatFilter === 'groups') return !!conversation.members;
+    if (chatFilter === 'pinned') return pinnedChats.includes(conversation.id);
+    return true;
+  }).sort((first, second) => {
+    if (chatFilter === 'pinned') return pinnedChats.indexOf(first.id) - pinnedChats.indexOf(second.id);
     const firstAt = chatMeta.get(first.id)?.lastMessageAt || '';
     const secondAt = chatMeta.get(second.id)?.lastMessageAt || '';
     return new Date(secondAt || 0) - new Date(firstAt || 0);
   });
-  if (accountOpen) return <div className={`chat-app ${dark ? 'chat-dark' : 'chat-light'}`}>
-    <AccountPage user={user} setUser={setUser} logout={logout} close={() => setAccountOpen(false)} />
-  </div>;
-  return <div className={`chat-app ${dark ? 'chat-dark' : 'chat-light'}`}>
-    <aside className={`${act ? 'chat-sidebar sidebar-hidden-mobile' : 'chat-sidebar'}`} style={{ '--sidebar-width': `${sidebarWidth}px` }}>
+  const togglePinned = id => setPinnedChats(current => {
+    const next = current.includes(id) ? current.filter(chatId => chatId !== id) : [...current, id];
+    try { localStorage.setItem(`metufy-pinned-${user.id}`, JSON.stringify(next)); } catch (storageError) { console.warn('Could not save pinned chats:', storageError); }
+    return next;
+  });
+  return <ChatLayout className={`${dark ? 'chat-dark' : 'chat-light'} ${glassTheme.style === 'glass' ? 'chat-liquid-glass' : ''}`} style={glassStyle(glassTheme)}>
+    <ChatList className={`${act ? 'chat-sidebar sidebar-hidden-mobile' : 'chat-sidebar'}`} style={{ '--sidebar-width': `${sidebarWidth}px` }}>
       <div className={`sidebar-top ${act ? 'mobile-chatlist-hidden' : ''}`}>
         <a className="sidebar-brand" href="#" aria-label="Metufy"><span className="brand-mark">m</span><b>metufy</b></a>
         <div className="sidebar-controls">
@@ -834,23 +1072,32 @@ export default function Chat({ user, setUser, logout }) {
           <button onClick={() => setAccountOpen(true)} aria-label="Account settings" title="Account settings">⚙</button>
         </div>
       </div>
-      <div className="profile-card">
-        <span className="profile-avatar" style={{ background: ac }}>{user.displayName?.[0]?.toUpperCase() || '?'}</span>
+      <button className="profile-card profile-card-button" onClick={() => setAccountOpen(open => !open)} aria-label="Open profile and appearance settings">
+        <Avatar url={user.avatarUrl} label={user.displayName} className="profile-avatar" style={{ background: ac }} />
         <span><b>{user.displayName}</b><small>@{user.username}</small></span>
         <i className="profile-online" title="Your account" />
-      </div>
+      </button>
       {error && <p role="alert" className="sidebar-error">{error}</p>}
       <div className="search-row">
         <label className="search-wrap"><span>⌕</span><input value={q} onChange={e => setQ(e.target.value)} placeholder="Search username" aria-label="Search exact username" /><kbd>/</kbd></label>
         <button className="new-group-button" onClick={() => setModal('group')} aria-label="Create new group" title="Create new group">＋</button>
       </div>
+      {!q && <div className="chat-filter-tabs" role="tablist" aria-label="Filter chats">
+        {[['all', 'All'], ['pinned', 'Pinned'], ['direct', 'Direct'], ['groups', 'Groups']].map(([filter, label]) =>
+          <button key={filter} role="tab" aria-selected={chatFilter === filter} className={chatFilter === filter ? 'chat-filter-active' : ''} onClick={() => setChatFilter(filter)}>{label}</button>
+        )}
+      </div>}
       <div className="sidebar-section-title">{q ? 'EXACT USERNAME MATCH' : 'CHATS'}<span>{!q && list.length}</span></div>
       <div className="sidebar-conversations">
-        {(q ? res : list).map(c => <button key={c.id} onClick={() => { setAct(c); setQ(''); }} className={`conversation-item ${act?.id === c.id ? 'conversation-active' : ''}`}>
-          <span className="conversation-avatar-wrap"><span className="conversation-avatar" style={{ background: ac }}>{(c.name || c.displayName || '?')[0].toUpperCase()}</span>{!c.members && online[c.id] && <i className="conversation-online" title="Online" />}</span>
-          <span className="conversation-info"><b>{c.name || c.displayName}</b><small>{q ? '@' + c.username : previewFor(c.id)}</small></span>
-          {!q && chatMeta.get(c.id)?.unreadCount > 0 && <i className="conversation-unread" title={`${chatMeta.get(c.id).unreadCount} unread message${chatMeta.get(c.id).unreadCount === 1 ? '' : 's'}`} />}
-        </button>)}
+        {(q ? res : list).map(c => <div key={c.id} className={`conversation-item ${act?.id === c.id ? 'conversation-active' : ''}`}>
+          <button type="button" className="conversation-select" onClick={() => { setAct({ ...c, chatId: chatMeta.get(c.id)?.chatId }); setQ(''); }}>
+            <span className="conversation-avatar-wrap"><Avatar url={c.avatarUrl} label={c.name || c.displayName} className="conversation-avatar" style={{ background: ac }} />{!c.members && <i className={`conversation-online ${online[c.id] ? '' : 'conversation-offline'}`} title={online[c.id] ? 'Online' : 'Offline'} />}</span>
+            <span className="conversation-info"><b>{c.name || c.displayName}</b><small>{q ? '@' + c.username : previewFor(c.id)}</small></span>
+          </button>
+          {!q && chatMeta.get(c.id)?.lastMessageAt && <time className="conversation-time">{new Date(chatMeta.get(c.id).lastMessageAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>}
+          {!q && <button type="button" className="conversation-pin-button" aria-label={pinnedChats.includes(c.id) ? 'Unpin chat' : 'Pin chat'} title={pinnedChats.includes(c.id) ? 'Unpin chat' : 'Pin chat'} onClick={() => togglePinned(c.id)}>{pinnedChats.includes(c.id) ? '★' : '☆'}</button>}
+          {!q && chatMeta.get(c.id)?.unreadCount > 0 && <span className="conversation-unread-badge" title={`${chatMeta.get(c.id).unreadCount} unread messages`}>{chatMeta.get(c.id).unreadCount > 99 ? '99+' : chatMeta.get(c.id).unreadCount}</span>}
+        </div>)}
         {q && !res.length && <p className="sidebar-empty">No exact username match for “{q}”. Search the complete username.</p>}
         {!q && !list.length && <p className="sidebar-empty">Search by username to start a conversation.</p>}
       </div>
@@ -858,9 +1105,10 @@ export default function Chat({ user, setUser, logout }) {
         <label className="sidebar-width-control"><span>Sidebar width</span><input type="range" min="260" max="420" step="10" value={sidebarWidth} onChange={e => setSidebarWidth(Number(e.target.value))} aria-label="Adjust sidebar width" /><span>{sidebarWidth}px</span></label>
         <button className="account-settings-button" onClick={() => setAccountOpen(true)}><span>⚙</span> Account <b>→</b></button>
       </div>
-    </aside>
-    {act ? <Room key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} ws={ws.current} online={online} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), pending] }))} onSendFailure={(clientId, message) => { setMsgs(s => ({ ...s, [act.id]: (s[act.id] || []).filter(item => item.clientId !== clientId) })); setError(message); }} error={error} />
+    </ChatList>
+    {act ? <MessageThread key={act.id} act={act} user={user} list={msgs[act.id] || []} callLogs={callLogs[act.id] || []} ws={ws.current} online={online} lastSeen={lastSeen} typing={typing} dark={dark} ac={ac} onCall={startCall} onBack={() => setAct(null)} onToggleDetails={() => setAccountOpen(open => !open)} onMarkRead={chatId => setChats(state => ({ ...state, chats: clearUnreadCount(state.chats, chatId) }))} onPending={pending => setMsgs(s => ({ ...s, [act.id]: [...(s[act.id] || []), { ...pending, chatId: act.chatId || act.id }] }))} onSendFailure={(clientId, message) => { setMsgs(s => ({ ...s, [act.id]: (s[act.id] || []).filter(item => item.clientId !== clientId) })); setError(message); }} error={error} />
       : <div className="chat-welcome"><span className="welcome-mark">m</span><b>Your conversations, all together.</b><p>Search for someone by username and say hello.</p></div>}
+    {accountOpen && <SettingsDrawer user={user} setUser={setUser} logout={logout} close={() => setAccountOpen(false)} activeChat={act} messages={act ? msgs[act.id] || [] : []} onProfileUpdate={load} />}
     {modal === 'group' && <NewGroup close={() => setModal(null)} done={load} />}
     {!soundReady && !inv && !call && <aside className={`sound-enable-prompt ${soundPromptDismissed ? 'sound-enable-compact' : ''}`} role="status">
       {!soundPromptDismissed && <div className="sound-enable-copy">
@@ -894,5 +1142,5 @@ export default function Chat({ user, setUser, logout }) {
       activeCallRef.current = null;
       setCall(null);
     }} />}
-  </div>;
+  </ChatLayout>;
 }
