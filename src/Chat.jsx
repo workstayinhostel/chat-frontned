@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'; import { api, loadMedia, makeId, tok } from './api'; import Call from './Call';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'; import { api, loadMedia, makeId, tok } from './api'; import Call from './Call';
 import { clearUnreadCount, conversationKey, createSendMessageEvent, eventType, markOutgoingMessagesRead, mergeMessage, normalizeMessage, restoreConversation } from './chatEvents';
+import { extractLinks } from './linkUtils.js';
 import { compressAndUploadImage } from './utils/media.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import { glassStyle, useTheme } from './context/ThemeContext.jsx';
@@ -161,6 +162,19 @@ function MessageItem({ message, previous, next, currentUserId, senderLabel, dark
   const groupedBefore = previous?.from === message.from;
   const groupedAfter = next?.from === message.from;
   const canEdit = mine && message.kind === 'text' && !message.deleted && Date.now() - new Date(message.at) < 3e5;
+  const links = !message.deleted && message.kind === 'text' ? extractLinks(message.text) : [];
+  const renderText = () => {
+    if (!links.length) return message.text;
+    let cursor = 0;
+    return <>
+      {links.map((link, index) => {
+        const before = message.text.slice(cursor, link.start);
+        cursor = link.end;
+        return <Fragment key={`${link.start}:${index}`}>{before}<a href={link.href} target="_blank" rel="noopener noreferrer">{link.text}</a></Fragment>;
+      })}
+      {message.text.slice(cursor)}
+    </>;
+  };
   useEffect(() => {
     if (message.status !== 'sending' || !message.clientId) return undefined;
     const timeout = setTimeout(() => {
@@ -201,7 +215,16 @@ function MessageItem({ message, previous, next, currentUserId, senderLabel, dark
       {!mine && !groupedBefore && senderLabel && <small className="message-author">{senderLabel}</small>}
       {message.deleted ? <i className="opacity-60">{message.text}</i>
         : message.kind === 'image' || message.kind === 'audio' ? <MediaAttachment id={message.text} kind={message.kind} mediaUrl={message.mediaUrl} />
-          : <span className="whitespace-pre-wrap break-words">{message.text}</span>}
+          : <span className="message-text whitespace-pre-wrap break-words">{renderText()}</span>}
+      {links.length > 0 && <div className="message-link-previews">
+        {[...new Map(links.map(link => [link.href, link])).values()].map(link =>
+          <a className="message-link-preview" href={link.href} target="_blank" rel="noopener noreferrer" key={link.href}>
+            <span className="message-link-preview-label">Link preview</span>
+            <strong>{link.hostname}</strong>
+            <small>{link.text}</small>
+          </a>
+        )}
+      </div>}
       {!message.deleted && <div className="message-meta">
         <time dateTime={new Date(message.at).toISOString()}>{new Date(message.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
         {mine && message.edited && <small>(edited)</small>}
@@ -210,6 +233,24 @@ function MessageItem({ message, previous, next, currentUserId, senderLabel, dark
           <button type="button" className="message-retry" onClick={() => onRetry(message)}>Retry</button>}
       </div>}
     </div>
+  </div>;
+}
+
+function ToastStack({ toasts, dismiss }) {
+  return <div className="chat-toast-stack" aria-live="polite" aria-relevant="additions">
+    {toasts.map(toast => <Toast key={toast.id} toast={toast} dismiss={dismiss} />)}
+  </div>;
+}
+
+function Toast({ toast, dismiss }) {
+  useEffect(() => {
+    const timer = setTimeout(() => dismiss(toast.id), 5000);
+    return () => clearTimeout(timer);
+  }, [toast.id, dismiss]);
+  return <div className="chat-toast" role="status">
+    <span className="chat-toast-icon" aria-hidden="true">✦</span>
+    <span className="chat-toast-copy"><b>{toast.title}</b><small>{toast.body}</small></span>
+    <button type="button" onClick={() => dismiss(toast.id)} aria-label="Dismiss notification">×</button>
   </div>;
 }
 
@@ -300,12 +341,12 @@ export function SettingsDrawer({ user, setUser, logout, close, onProfileUpdate }
       </section>
       <section className="account-section">
         <div className="account-section-heading"><b>Privacy & appearance</b><small>Set your availability and look</small></div>
-        <label className="account-setting-row"><span><b>Glassmorphism</b><small>Liquid glass or standard slate</small></span><select value={theme.style} onChange={event => setStyle(event.target.value)}><option value="standard">Standard</option><option value="glass">Liquid Glass</option></select></label>
+        <label className="account-setting-row"><span><b>Liquid Glass</b><small>Glossy, translucent chat surfaces</small></span><input type="checkbox" role="switch" checked={theme.style === 'glass'} onChange={event => setStyle(event.target.checked ? 'glass' : 'standard')} /></label>
         {theme.style === 'glass' && <>
           <label className="account-setting-row"><span><b>Glass blur</b><small>{theme.blur}px</small></span><input type="range" min="0" max="24" value={theme.blur} onChange={event => setBlur(event.target.value)} /></label>
           <label className="account-setting-row"><span><b>Surface opacity</b><small>{theme.opacity}%</small></span><input type="range" min="10" max="60" value={theme.opacity} onChange={event => setOpacity(event.target.value)} /></label>
         </>}
-        <label className="account-setting-row"><span><b>Active status</b><small>Let your contacts know when you’re online</small></span><input type="checkbox" checked={f.activeStatus} onChange={e => setF({ ...f, activeStatus: e.target.checked })} /></label>
+        <label className="account-setting-row"><span><b>Active status</b><small>Let your contacts know when you’re online</small></span><input type="checkbox" role="switch" checked={f.activeStatus} onChange={e => setF({ ...f, activeStatus: e.target.checked })} /></label>
         <label className="account-setting-row"><span><b>Theme</b><small>Choose your chat appearance</small></span><select value={f.theme.wallpaper} onChange={e => setF({ ...f, theme: { ...f.theme, wallpaper: e.target.value } })}><option value="dark">Dark</option><option value="light">Light</option></select></label>
         <label className="account-setting-row"><span><b>Accent color</b><small>Personalize your chat controls</small></span><input type="color" value={f.theme.accent} onChange={e => setF({ ...f, theme: { ...f.theme, accent: e.target.value } })} /></label>
       </section>
@@ -694,6 +735,7 @@ export function MessageThread({ act, user, list, callLogs, callNotices = [], ws,
 
 export default function Chat({ user, setUser, logout }) {
   const [chats, setChats] = useState({ users: [], groups: [], chats: [] }), [act, setAct] = useState(null), [msgs, setMsgs] = useState({}), [online, setOnline] = useState({}), [lastSeen, setLastSeen] = useState({}), [typing, setTyping] = useState({}), [error, setError] = useState('');
+  const [toasts, setToasts] = useState([]);
   const [chatsLoaded, setChatsLoaded] = useState(false);
   const [callLogs, setCallLogs] = useState({});
   const [callNotices, setCallNotices] = useState([]);
@@ -1124,6 +1166,16 @@ export default function Chat({ user, setUser, logout }) {
         const message = acceptMessage(type === 'MESSAGE' ? e.message : e.m);
         if (message.from !== user.id) {
           playSound('messageReceived');
+          const conversationId = keyOf(message);
+          const current = activeChatR.current;
+          if (document.visibilityState !== 'visible' || !document.hasFocus() || current?.id !== conversationId) {
+            const sender = chatsR.current.users.find(contact => contact.id === message.from);
+            setToasts(currentToasts => [...currentToasts.slice(-3), {
+              id: makeId(),
+              title: sender ? `@${sender.username}` : 'New message',
+              body: message.kind === 'image' ? 'Shared a photo' : message.kind === 'audio' ? 'Sent a voice message' : message.text
+            }]);
+          }
           w.send({ t: 'delivered', id: message.id });
           load();
         }
@@ -1510,6 +1562,21 @@ export default function Chat({ user, setUser, logout }) {
     try { localStorage.setItem(`metufy-pinned-${user.id}`, JSON.stringify(next)); } catch (storageError) { console.warn('Could not save pinned chats:', storageError); }
     return next;
   });
+  const dismissToast = useCallback(id => setToasts(current => current.filter(toast => toast.id !== id)), []);
+  const dismissPermissionPrompts = () => {
+    if (!soundReady && !soundPromptDismissed) {
+      setSoundPromptDismissed(true);
+      try { localStorage.setItem('metufy-sounds-prompt-dismissed', 'true'); } catch (storageError) {
+        console.warn('Could not save sound prompt preference:', storageError);
+      }
+    }
+    if (notificationPermission === 'default' && !notificationPromptDismissed) {
+      setNotificationPromptDismissed(true);
+      try { localStorage.setItem('metufy-notification-prompt-dismissed', 'true'); } catch (storageError) {
+        console.warn('Could not save notification preference:', storageError);
+      }
+    }
+  };
   return <ChatLayout className={`${dark ? 'chat-dark' : 'chat-light'} ${glassTheme.style === 'glass' ? 'chat-liquid-glass' : ''}`} style={glassStyle(glassTheme)}>
     <ChatList className={`${act ? 'chat-sidebar sidebar-hidden-mobile' : 'chat-sidebar'}`} style={{ '--sidebar-width': `${sidebarWidth}px` }}>
       <div className={`sidebar-top ${act ? 'mobile-chatlist-hidden' : ''}`}>
@@ -1564,31 +1631,27 @@ export default function Chat({ user, setUser, logout }) {
     {detailsOpen && act && <ConversationDetailsDrawer activeChat={act} messages={msgs[act.id] || []}
       accent={ac} close={() => setDetailsOpen(false)} />}
     {modal === 'group' && <NewGroup close={() => setModal(null)} done={load} />}
-    {!soundReady && !soundPromptDismissed && !inv && !call && <aside className="sound-enable-prompt" role="status">
-      <div className="sound-enable-copy">
-        <b>Enable Metufy sounds</b>
-        <span>Tap once to allow message and call audio on this device.</span>
-      </div>
-      {soundError && <span className="sound-enable-error" role="alert">{soundError}</span>}
-      <button type="button" onClick={() => enableSounds()}>Enable sounds</button>
-      <button type="button" className="sound-enable-dismiss" onClick={() => {
-        setSoundPromptDismissed(true);
-        try { localStorage.setItem('metufy-sounds-prompt-dismissed', 'true'); } catch (storageError) {
-          console.warn('Could not save sound prompt preference:', storageError);
-        }
-      }}>Not now</button>
-    </aside>}
-    {notificationPermission === 'default' && !notificationPromptDismissed && !inv && !call &&
-      <aside className="call-notification-prompt" role="status">
-        <div><b>Missed call alerts</b><small>Allow browser notifications to see missed calls while Metufy is open or when you return.</small></div>
-        <button type="button" onClick={requestCallNotifications}>Allow notifications</button>
-        <button type="button" className="call-notification-dismiss" onClick={() => {
-          setNotificationPromptDismissed(true);
-          try { localStorage.setItem('metufy-notification-prompt-dismissed', 'true'); } catch (storageError) {
-            console.warn('Could not save notification preference:', storageError);
-          }
-        }}>Not now</button>
-      </aside>}
+    {((!soundReady && !soundPromptDismissed) || (notificationPermission === 'default' && !notificationPromptDismissed)) && !inv && !call &&
+      <div className="permission-modal-backdrop">
+        <section className="permission-modal" role="dialog" aria-modal="true" aria-labelledby="permission-modal-title">
+          <span className="permission-modal-mark" aria-hidden="true">✦</span>
+          <h2 id="permission-modal-title">Stay in the loop</h2>
+          <p>Choose whether Metufy can play message and call sounds and show missed-call alerts.</p>
+          <div className="permission-modal-options">
+            {!soundReady && !soundPromptDismissed && <div><span aria-hidden="true">♫</span><span><b>Sounds</b><small>Hear new messages and calls</small></span></div>}
+            {notificationPermission === 'default' && !notificationPromptDismissed && <div><span aria-hidden="true">♧</span><span><b>Notifications</b><small>See missed-call alerts from this browser</small></span></div>}
+          </div>
+          {soundError && <p className="permission-modal-error" role="alert">{soundError}</p>}
+          <div className="permission-modal-actions">
+            <button type="button" className="permission-modal-accept" aria-label="Enable sounds and notifications" title="Enable" onClick={() => {
+              if (!soundReady && !soundPromptDismissed) enableSounds();
+              if (notificationPermission === 'default' && !notificationPromptDismissed) requestCallNotifications();
+            }}>✓</button>
+            <button type="button" className="permission-modal-dismiss" aria-label="Not now" title="Not now" onClick={dismissPermissionPrompts}>×</button>
+          </div>
+        </section>
+      </div>}
+    <ToastStack toasts={toasts} dismiss={dismissToast} />
     {callSetupBusy && <div className="call-setup-waiting" role="status">Requesting microphone{call ? ' and camera' : ''} access… Allow the browser permission prompt to continue.</div>}
     {callSetupError && <div className="call-setup-error" role="alert"><span>{callSetupError}</span><button onClick={() => setCallSetupError('')} aria-label="Dismiss">×</button></div>}
     {inv && !call && <CallNotification

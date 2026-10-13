@@ -41,48 +41,27 @@ export default function App() {
         );
       });
     };
+    const refreshViewportWhenVisible = () => {
+      if (document.visibilityState === 'visible') updateViewport();
+    };
     updateViewport();
     viewport?.addEventListener('resize', updateViewport);
     viewport?.addEventListener('scroll', updateViewport);
     window.addEventListener('resize', updateViewport);
     window.addEventListener('orientationchange', updateViewport);
+    document.addEventListener('visibilitychange', refreshViewportWhenVisible);
+    window.addEventListener('pageshow', refreshViewportWhenVisible);
     return () => {
       cancelAnimationFrame(frame);
       viewport?.removeEventListener('resize', updateViewport);
       viewport?.removeEventListener('scroll', updateViewport);
       window.removeEventListener('resize', updateViewport);
       window.removeEventListener('orientationchange', updateViewport);
+      document.removeEventListener('visibilitychange', refreshViewportWhenVisible);
+      window.removeEventListener('pageshow', refreshViewportWhenVisible);
       document.documentElement.style.removeProperty('--app-viewport-height');
       document.documentElement.style.removeProperty('--app-viewport-top');
       document.documentElement.style.removeProperty('--app-composer-bottom-inset');
-    };
-  }, []);
-  useEffect(() => {
-    const resumeReloadDelay = 5 * 60 * 1000;
-    let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : 0;
-    let reloadStarted = false;
-    const reloadAfterLongPause = () => {
-      if (reloadStarted) return;
-      reloadStarted = true;
-      window.location.reload();
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        hiddenAt = Date.now();
-      } else if (hiddenAt && Date.now() - hiddenAt >= resumeReloadDelay) {
-        reloadAfterLongPause();
-      } else {
-        hiddenAt = 0;
-      }
-    };
-    const onPageShow = event => {
-      if (event.persisted) reloadAfterLongPause();
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    window.addEventListener('pageshow', onPageShow);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      window.removeEventListener('pageshow', onPageShow);
     };
   }, []);
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, useState } from 'react';
 
 const ThemeContext = createContext(null);
-const DEFAULT_THEME = { style: 'standard', blur: 16, opacity: 32 };
+const DEFAULT_THEME = { style: 'standard', blur: 24, opacity: 42 };
 
 function readTheme() {
   try {
@@ -51,7 +51,7 @@ export function useTheme() {
 export function glassStyle(theme) {
   return {
     '--glass-blur': `${theme.blur}px`,
-    '--glass-opacity': `${100 - theme.opacity}%`,
+    '--glass-opacity': `${theme.opacity}%`,
     '--glass-highlight': theme.style === 'glass' ? 'rgba(255,255,255,.3)' : 'transparent'
   };
 }
