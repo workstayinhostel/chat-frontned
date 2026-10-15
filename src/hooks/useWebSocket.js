@@ -55,14 +55,15 @@ export function useWebSocket(handlers = {}) {
         connection.reconnect();
       }
     };
-    const reconnectFromPageShow = event => {
-      if (event.persisted) reconnectOnResume();
-    };
+    const reconnectFromPageShow = () => reconnectOnResume();
+    const reconnectWhenOnline = () => reconnectOnResume();
     document.addEventListener('visibilitychange', reconnectOnResume);
     window.addEventListener('pageshow', reconnectFromPageShow);
+    window.addEventListener('online', reconnectWhenOnline);
     return () => {
       document.removeEventListener('visibilitychange', reconnectOnResume);
       window.removeEventListener('pageshow', reconnectFromPageShow);
+      window.removeEventListener('online', reconnectWhenOnline);
       unsubscribe();
       connectionRef.current = null;
       connection.close();

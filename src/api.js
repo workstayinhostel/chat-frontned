@@ -1,7 +1,44 @@
 const env = import.meta.env || {};
 export const API_BASE_URL = (env.VITE_API_URL || env.VITE_API || 'https://chat-backend-m43q.onrender.com').replace(/\/+$/, '');
-// JWT lives in sessionStorage only; messages are held in memory and never written to client storage.
-export const tok = () => sessionStorage.getItem('t');
+const AUTH_TOKEN_KEY = 't';
+export const tok = () => {
+  try {
+    const sessionToken = sessionStorage.getItem(AUTH_TOKEN_KEY);
+    if (sessionToken) return sessionToken;
+  } catch (error) {
+    console.warn('Could not read the current-session login:', error);
+  }
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
+  } catch (error) {
+    console.warn('Could not read the persisted login:', error);
+    return null;
+  }
+};
+export function saveAuthToken(token) {
+  try {
+    sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+  } catch (error) {
+    console.warn('Could not save the current-session login:', error);
+  }
+  try {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } catch (error) {
+    console.warn('Could not persist the login between app launches:', error);
+  }
+}
+export function clearAuthToken() {
+  try {
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch (error) {
+    console.warn('Could not clear the current-session login:', error);
+  }
+  try {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch (error) {
+    console.warn('Could not clear the persisted login:', error);
+  }
+}
 export function makeId() {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   if (typeof crypto.getRandomValues === 'function') {
@@ -48,8 +85,9 @@ export async function loadMedia(id) {
   return r.blob();
 }
 export function connect() {
-  let ws, dead = false, reconnectTimer, reconnectDelay = 1000;
+  let ws, dead = false, opening = false, generation = 0, reconnectTimer, openTimeout, reconnectDelay = 1000;
   const subs = new Set(), queuedMessages = [];
+  const connectionTimeout = 15_000;
   const queueableTypes = new Set([
     'SEND_MESSAGE', 'msg', 'call-invite', 'call-join', 'call-leave', 'call-decline',
     'WEBRTC_SIGNAL', 'sig'
@@ -67,15 +105,59 @@ export function connect() {
     queuedMessages.push({ event, expiresAt: Date.now() + 30_000 });
     return true;
   };
-  const open = () => {
-    if (dead) return;
+  const scheduleReconnect = () => {
     clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(open, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+  };
+  const open = async () => {
+    if (dead || opening) return;
+    clearTimeout(reconnectTimer);
+    clearTimeout(openTimeout);
+    opening = true;
+    const currentGeneration = ++generation;
+    let ticket;
+    try {
+      const result = await api('/ws-ticket', { method: 'POST' });
+      if (typeof result.ticket !== 'string' || !result.ticket) {
+        throw new Error('The server returned an invalid chat connection ticket.');
+      }
+      ticket = result.ticket;
+    } catch (error) {
+      if (dead || currentGeneration !== generation) return;
+      opening = false;
+      const message = error.status === 401
+        ? 'Your session has expired. Sign in again to connect to chat.'
+        : `Could not authorize the chat connection: ${error.message}`;
+      subs.forEach(listener => listener({ t: 'error', error: message }));
+      if (error.status !== 401) scheduleReconnect();
+      return;
+    }
+    if (dead || currentGeneration !== generation) return;
     const wsUrl = new URL(`${API_BASE_URL}/ws`);
     wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(wsUrl);
+    wsUrl.searchParams.set('ticket', ticket);
+    let socket;
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch (error) {
+      opening = false;
+      console.error('Could not open the chat WebSocket:', error);
+      subs.forEach(listener => listener({ t: 'error', error: 'Could not connect to chat. Check the secure API URL and network, then retry.' }));
+      scheduleReconnect();
+      return;
+    }
+    opening = false;
     ws = socket;
+    openTimeout = setTimeout(() => {
+      if (ws === socket && socket.readyState === WebSocket.CONNECTING) {
+        subs.forEach(listener => listener({ t: 'reconnecting' }));
+        socket.close();
+      }
+    }, connectionTimeout);
     socket.onopen = () => {
       if (ws !== socket) return;
+      clearTimeout(openTimeout);
       reconnectDelay = 1000;
       while (queuedMessages.length && socket.readyState === WebSocket.OPEN) {
         const queued = queuedMessages[0];
@@ -113,10 +195,10 @@ export function connect() {
       }
     };
     socket.onclose = () => {
+      clearTimeout(openTimeout);
       if (dead || ws !== socket) return;
       subs.forEach(listener => listener({ t: 'reconnecting' }));
-      reconnectTimer = setTimeout(open, reconnectDelay);
-      reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+      scheduleReconnect();
     };
   };
   open();
@@ -147,6 +229,9 @@ export function connect() {
     reconnect: () => {
       if (dead) return false;
       clearTimeout(reconnectTimer);
+      clearTimeout(openTimeout);
+      generation += 1;
+      opening = false;
       subs.forEach(listener => listener({ t: 'reconnecting' }));
       if (ws && ws.readyState !== WebSocket.CLOSED) {
         const previous = ws;
@@ -164,7 +249,10 @@ export function connect() {
     sub: f => (subs.add(f), () => subs.delete(f)),
     close: () => {
       dead = true;
+      generation += 1;
+      opening = false;
       clearTimeout(reconnectTimer);
+      clearTimeout(openTimeout);
       queuedMessages.length = 0;
       ws?.close();
     }

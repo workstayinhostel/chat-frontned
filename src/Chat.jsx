@@ -1111,12 +1111,17 @@ export default function Chat({ user, setUser, logout }) {
       Object.values(msgsR.current).flat().filter(message => message.status === 'sending')
         .forEach(retryMessage);
     };
+    let lastResumeRefresh = 0;
     const retryPending = () => {
       if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastResumeRefresh < 1500) return;
+      lastResumeRefresh = now;
       retryPendingMessages();
       load();
       const current = activeChatR.current;
       if (current) {
+        loadCallLogs(current);
         api(`/messages/${current.id}${current.members ? `?g=${encodeURIComponent(current.id)}` : ''}`)
           .then(messages => {
             setMsgs(state => {
@@ -1132,6 +1137,7 @@ export default function Chat({ user, setUser, logout }) {
           })
           .catch(e => setError(e.message));
       }
+      if (notificationPermission === 'granted') loadMissedCallNotifications();
     };
     const off = w.sub(e => {
       const type = eventType(e);
@@ -1149,7 +1155,10 @@ export default function Chat({ user, setUser, logout }) {
       };
       if (type === 'ready') {
         retryPendingMessages();
+        load();
         const current = activeChatR.current;
+        if (current) loadCallLogs(current);
+        if (notificationPermission === 'granted') loadMissedCallNotifications();
         if (current && document.visibilityState === 'visible' && document.hasFocus()) {
           w.send({ type: 'MARK_READ', chatId: current.chatId || current.id });
           setChats(state => clearUnreadCount(state, current.chatId || current.id));

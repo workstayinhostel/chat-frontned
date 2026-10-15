@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'; import { api, tok } from './api';
+import { useEffect, useState } from 'react'; import { api, clearAuthToken, saveAuthToken, tok } from './api';
 import { Auth, Setup } from './Auth'; import Chat from './Chat';
 export default function App() {
   const [user, setUser] = useState(null), [ready, setReady] = useState(false), [loadError, setLoadError] = useState('');
@@ -11,11 +11,14 @@ export default function App() {
     setReady(false);
     setLoadError('');
     api('/me').then(profile => {
+      const token = tok();
+      if (token) saveAuthToken(token);
       setUser(profile);
       navigate(profile.username ? 'chat' : 'setup');
     }).catch(error => {
       if (error.status === 401) {
         sessionStorage.clear();
+        clearAuthToken();
         setUser(null);
         navigate('login');
       } else {
@@ -26,6 +29,7 @@ export default function App() {
   useEffect(() => { loadUser(); }, []);
   useEffect(() => {
     const viewport = window.visualViewport;
+    let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : 0;
     let frame = 0;
     const updateViewport = () => {
       cancelAnimationFrame(frame);
@@ -41,8 +45,26 @@ export default function App() {
         );
       });
     };
-    const refreshViewportWhenVisible = () => {
-      if (document.visibilityState === 'visible') updateViewport();
+    const refreshViewportWhenVisible = event => {
+      if (document.visibilityState !== 'visible') {
+        hiddenAt = Date.now();
+        return;
+      }
+      if ((event?.persisted || (hiddenAt && Date.now() - hiddenAt > 5 * 60 * 1000))) {
+        let callCanResume = false;
+        try {
+          const savedCall = JSON.parse(sessionStorage.getItem('metufy-active-call') || 'null');
+          callCanResume = Boolean(savedCall?.room && Date.now() - savedCall.savedAt <= 55_000);
+        } catch (error) {
+          console.warn('Could not inspect call state before resuming the app:', error);
+        }
+        if (!callCanResume) {
+          window.location.reload();
+          return;
+        }
+      }
+      hiddenAt = 0;
+      updateViewport();
     };
     updateViewport();
     viewport?.addEventListener('resize', updateViewport);
@@ -67,6 +89,7 @@ export default function App() {
   useEffect(() => {
     const expire = () => {
       sessionStorage.clear();
+      clearAuthToken();
       setUser(null);
       navigate('login');
     };
@@ -107,7 +130,7 @@ export default function App() {
     </section>
   </main>;
   if (!user || route === 'login') return <Auth onAuth={(t, u) => {
-    sessionStorage.setItem('t', t);
+    saveAuthToken(t);
     setUser(u);
     navigate(u.username ? 'chat' : 'setup');
   }} />;
@@ -117,6 +140,7 @@ export default function App() {
   }} />;
   return <Chat user={user} setUser={setUser} logout={() => {
     sessionStorage.clear();
+    clearAuthToken();
     setUser(null);
     navigate('login');
   }} />;
