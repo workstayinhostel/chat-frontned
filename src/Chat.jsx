@@ -1444,6 +1444,10 @@ export default function Chat({ user, setUser, logout }) {
   const startCall = async video => {
     if (callSetupBusy) return;
     setCallSetupError('');
+    if (!ws.current?.isOpen()) {
+      setCallSetupError('The real-time chat connection is not ready. Wait for it to reconnect before calling.');
+      return;
+    }
     setCallSetupBusy(true);
     let stream;
     try {
@@ -1452,6 +1456,7 @@ export default function Chat({ user, setUser, logout }) {
       const invite = act.members
         ? { t: 'call-invite', group: act.id, room, video, name: act.name }
         : { t: 'call-invite', to: [act.id], room, video, name: act.displayName };
+      if (!ws.current?.isOpen()) throw new Error('The real-time chat connection was lost. Please retry the call.');
       if (!ws.current.send(invite)) throw new Error('Reconnecting to Metufy. Please try the call again.');
       const activeCall = {
         room,

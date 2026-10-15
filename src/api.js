@@ -190,7 +190,10 @@ export function connect() {
     };
     socket.onerror = () => {
       if (ws === socket) {
-        subs.forEach(listener => listener({ t: 'reconnecting' }));
+        subs.forEach(listener => listener({
+          t: 'error',
+          error: 'The real-time chat connection failed. Verify the deployed backend WebSocket ticket endpoint and /ws upgrade logs.'
+        }));
         socket.close();
       }
     };
@@ -246,6 +249,7 @@ export function connect() {
       open();
       return true;
     },
+    isOpen: () => ws?.readyState === WebSocket.OPEN,
     sub: f => (subs.add(f), () => subs.delete(f)),
     close: () => {
       dead = true;

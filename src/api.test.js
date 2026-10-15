@@ -111,9 +111,11 @@ test('queues call signaling until a reconnecting WebSocket opens', async () => {
 
   assert.equal(connection.send(invite), true);
   await waitForSocket(1);
+  assert.equal(connection.isOpen(), false);
   assert.deepEqual(MockWebSocket.instances[0].sent, []);
   assert.equal(new URL(MockWebSocket.instances[0].url).searchParams.get('ticket'), 'one-use-ticket-1');
   MockWebSocket.instances[0].open();
+  assert.equal(connection.isOpen(), true);
   assert.deepEqual(MockWebSocket.instances[0].sent, [invite]);
   assert.equal(events.some(event => event.t === 'ready'), true);
 
@@ -160,6 +162,28 @@ test('does not queue typing events when a socket send fails', async () => {
   assert.equal(connection.send({ t: 'typing', to: 'user-b' }), false);
   assert.equal(MockWebSocket.instances[0].readyState, MockWebSocket.CLOSED);
 
+  connection.close();
+  globalThis.WebSocket = previousWebSocket;
+  restoreFetch();
+});
+
+test('reports an actionable error when the browser rejects a WebSocket handshake', async () => {
+  const previousWebSocket = globalThis.WebSocket;
+  const restoreFetch = mockWebSocketTicketFetch();
+  MockWebSocket.instances = [];
+  globalThis.WebSocket = MockWebSocket;
+  const connection = connect();
+  const events = [];
+  const unsubscribe = connection.sub(event => events.push(event));
+  await waitForSocket(1);
+
+  MockWebSocket.instances[0].onerror();
+  assert.equal(events.some(event =>
+    event.t === 'error' && event.error.includes('backend WebSocket ticket endpoint')
+  ), true);
+  assert.equal(connection.isOpen(), false);
+
+  unsubscribe();
   connection.close();
   globalThis.WebSocket = previousWebSocket;
   restoreFetch();
