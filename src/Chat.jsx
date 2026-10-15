@@ -261,7 +261,8 @@ function CallLogItem({ call, currentUserId, group }) {
     : call.answeredAt
       ? 'Completed'
       : direction === 'Incoming' ? 'Missed' : 'Cancelled';
-  const others = call.members.filter(member => member.id !== currentUserId);
+  const others = (Array.isArray(call.members) ? call.members : [])
+    .filter(member => member?.id !== currentUserId);
   return <div className="call-log-row">
     <div className={`call-log-icon ${call.endReason === 'declined' || result === 'Missed' ? 'call-log-missed' : ''}`}>{call.video ? '▣' : '☎'}</div>
     <div className="call-log-details">
@@ -1049,10 +1050,12 @@ export default function Chat({ user, setUser, logout }) {
   const loadCallLogs = conversation => {
     if (!conversation) return;
     const path = `/calls/${conversation.id}${conversation.members ? `?g=${encodeURIComponent(conversation.id)}` : ''}`;
-    api(path).then(logs => setCallLogs(current => ({
-      ...current,
-      [conversation.id]: expectArray(logs, 'call history')
-    })))
+    api(path).then(response => {
+      const logs = expectArray(response, 'call history')
+        .filter(log => log && typeof log === 'object')
+        .map(log => ({ ...log, members: Array.isArray(log.members) ? log.members : [] }));
+      setCallLogs(current => ({ ...current, [conversation.id]: logs }));
+    })
       .catch(e => setError(e.message));
   };
   const refreshCallLogsForEvent = event => {
