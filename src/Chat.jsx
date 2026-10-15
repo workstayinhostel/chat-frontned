@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'; import { api, loadMedia, makeId, tok } from './api'; import Call from './Call';
-import { clearUnreadCount, conversationKey, createSendMessageEvent, eventType, markOutgoingMessagesRead, mergeMessage, normalizeMessage, restoreConversation } from './chatEvents';
+import { clearUnreadCount, conversationKey, createSendMessageEvent, eventType, expectArray, markOutgoingMessagesRead, mergeMessage, normalizeChatData, normalizeMessage, restoreConversation } from './chatEvents';
 import { extractLinks } from './linkUtils.js';
 import { compressAndUploadImage } from './utils/media.js';
 import { useWebSocket } from './hooks/useWebSocket.js';
@@ -1031,12 +1031,12 @@ export default function Chat({ user, setUser, logout }) {
     }
   };
   const load = () => api('/chats').then(data => {
-    setChats(data);
+    setChats(normalizeChatData(data));
     setChatsLoaded(true);
     setError('');
   }).catch(e => setError(e.message));
   const loadMissedCallNotifications = () => api('/calls/missed')
-    .then(missedCalls => missedCalls.forEach(notifyMissedCall))
+    .then(missedCalls => expectArray(missedCalls, 'missed call').forEach(notifyMissedCall))
     .catch(loadError => {
       missedCallsChecked.current = false;
       setError(`Could not check missed calls: ${loadError.message}`);
@@ -1049,7 +1049,10 @@ export default function Chat({ user, setUser, logout }) {
   const loadCallLogs = conversation => {
     if (!conversation) return;
     const path = `/calls/${conversation.id}${conversation.members ? `?g=${encodeURIComponent(conversation.id)}` : ''}`;
-    api(path).then(logs => setCallLogs(current => ({ ...current, [conversation.id]: logs })))
+    api(path).then(logs => setCallLogs(current => ({
+      ...current,
+      [conversation.id]: expectArray(logs, 'call history')
+    })))
       .catch(e => setError(e.message));
   };
   const refreshCallLogsForEvent = event => {
@@ -1123,7 +1126,8 @@ export default function Chat({ user, setUser, logout }) {
       if (current) {
         loadCallLogs(current);
         api(`/messages/${current.id}${current.members ? `?g=${encodeURIComponent(current.id)}` : ''}`)
-          .then(messages => {
+          .then(response => {
+            const messages = expectArray(response, 'messages');
             setMsgs(state => {
               const merged = new Map(messages.map(message => [message.id, message]));
               (state[current.id] || []).forEach(message => {
@@ -1164,7 +1168,10 @@ export default function Chat({ user, setUser, logout }) {
           setChats(state => clearUnreadCount(state, current.chatId || current.id));
         }
       }
-      if (e.t === 'online') setOnline(Object.fromEntries(e.ids.map(i => [i, true])));
+      if (e.t === 'online') {
+        if (Array.isArray(e.ids)) setOnline(Object.fromEntries(e.ids.map(i => [i, true])));
+        else setError('The server returned invalid online status data. Reconnecting…');
+      }
       if (type === 'PRESENCE' || e.t === 'presence') {
         const id = e.userId || e.id;
         const isOnline = e.status ? e.status === 'ONLINE' : e.on;
@@ -1315,7 +1322,8 @@ export default function Chat({ user, setUser, logout }) {
       const current = activeChatR.current;
       if (document.visibilityState !== 'visible' || !current) return;
       api(`/messages/${current.id}${current.members ? `?g=${encodeURIComponent(current.id)}` : ''}`)
-        .then(messages => {
+        .then(response => {
+          const messages = expectArray(response, 'messages');
           setMsgs(state => {
             const merged = [...(state[current.id] || [])];
             messages.forEach(message => {
@@ -1369,9 +1377,10 @@ export default function Chat({ user, setUser, logout }) {
   useEffect(() => {
     if (!act) return;
     loadCallLogs(act);
-    api(`/messages/${act.id}${act.members ? `?g=${encodeURIComponent(act.id)}` : ''}`).then(r => {
+    api(`/messages/${act.id}${act.members ? `?g=${encodeURIComponent(act.id)}` : ''}`).then(response => {
+      const messages = expectArray(response, 'messages');
       setMsgs(s => {
-        const merged = new Map(r.map(message => [message.id, message]));
+        const merged = new Map(messages.map(message => [message.id, message]));
         const rank = { sending: 0, sent: 1, delivered: 2, seen: 3 };
         (s[act.id] || []).forEach(message => {
           const loaded = merged.get(message.id);
@@ -1391,7 +1400,10 @@ export default function Chat({ user, setUser, logout }) {
       return;
     }
     const t = setTimeout(() => api('/users/search?q=' + encodeURIComponent(normalized))
-      .then(users => setRes(users.filter(contact => contact.username.toLowerCase() === normalized.toLowerCase())))
+      .then(response => {
+        const users = expectArray(response, 'user search');
+        setRes(users.filter(contact => contact.username.toLowerCase() === normalized.toLowerCase()));
+      })
       .catch(e => setError(e.message)), 160);
     return () => clearTimeout(t);
   }, [q]);

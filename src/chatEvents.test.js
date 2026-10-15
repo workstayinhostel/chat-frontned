@@ -5,14 +5,36 @@ import {
   conversationKey,
   createSendMessageEvent,
   eventType,
+  expectArray,
   markOutgoingMessagesRead,
   mergeMessage,
+  normalizeChatData,
   restoreConversation
 } from './chatEvents.js';
 
 test('normalizes long-form and legacy event names', () => {
   assert.equal(eventType({ type: 'MESSAGE' }), 'MESSAGE');
   assert.equal(eventType({ t: 'msg' }), 'msg');
+});
+
+test('normalizes chat lists and rejects malformed list responses', () => {
+  assert.deepEqual(normalizeChatData({
+    users: [{ id: 'user-1' }],
+    groups: [{ id: 'group-1', members: [] }],
+    chats: [{ id: 'chat-1' }]
+  }), {
+    users: [{ id: 'user-1' }],
+    groups: [{ id: 'group-1', members: [] }],
+    chats: [{ id: 'chat-1' }]
+  });
+  assert.deepEqual(normalizeChatData({ users: [], groups: [] }), {
+    users: [],
+    groups: [],
+    chats: []
+  });
+  assert.throws(() => normalizeChatData({ users: {}, groups: [] }), /invalid contacts data/);
+  assert.throws(() => normalizeChatData({ users: [], groups: [{ id: 'group-1' }] }), /invalid group member data/);
+  assert.throws(() => expectArray(null, 'messages'), /invalid messages data/);
 });
 
 test('creates backend message events for text and image payloads', () => {

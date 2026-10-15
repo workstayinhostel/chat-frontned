@@ -29,7 +29,6 @@ export default function App() {
   useEffect(() => { loadUser(); }, []);
   useEffect(() => {
     const viewport = window.visualViewport;
-    let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : 0;
     let frame = 0;
     const updateViewport = () => {
       cancelAnimationFrame(frame);
@@ -45,25 +44,8 @@ export default function App() {
         );
       });
     };
-    const refreshViewportWhenVisible = event => {
-      if (document.visibilityState !== 'visible') {
-        hiddenAt = Date.now();
-        return;
-      }
-      if ((event?.persisted || (hiddenAt && Date.now() - hiddenAt > 5 * 60 * 1000))) {
-        let callCanResume = false;
-        try {
-          const savedCall = JSON.parse(sessionStorage.getItem('metufy-active-call') || 'null');
-          callCanResume = Boolean(savedCall?.room && Date.now() - savedCall.savedAt <= 55_000);
-        } catch (error) {
-          console.warn('Could not inspect call state before resuming the app:', error);
-        }
-        if (!callCanResume) {
-          window.location.reload();
-          return;
-        }
-      }
-      hiddenAt = 0;
+    const refreshViewportWhenVisible = () => {
+      if (document.visibilityState !== 'visible') return;
       updateViewport();
     };
     updateViewport();
