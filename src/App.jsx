@@ -26,7 +26,13 @@ export default function App() {
       }
     }).finally(() => setReady(true));
   };
-  useEffect(() => { loadUser(); }, []);
+  useEffect(() => {
+    if (!tok()) {
+      setReady(true);
+      return;
+    }
+    loadUser();
+  }, []);
   useEffect(() => {
     const viewport = window.visualViewport;
     let frame = 0;

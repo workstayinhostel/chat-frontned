@@ -127,6 +127,9 @@ button:disabled { cursor: wait; opacity: .65; }
 }
 .brand-heart { color: #e56a83; }
 .brand-copy p { max-width: 335px; margin: 0; color: #798399; font-size: 14px; line-height: 1.8; }
+.auth-credit { display: inline-block; margin-top: 8px; color: #6878cf; font-size: 12px; font-weight: 600; text-decoration: none; }
+.auth-credit:hover { text-decoration: underline; }
+.auth-credit:focus-visible { border-radius: 2px; outline: 2px solid currentColor; outline-offset: 3px; }
 .auth-mobile-promise { display: none; }
 .chat-preview {
   position: relative;
@@ -657,6 +660,7 @@ button:disabled { cursor: wait; opacity: .65; }
   .auth-mobile-promise { display: block; margin: 0 auto 25px; }
   .auth-mobile-promise h1 { margin: 0 0 8px; color: #202941; font-size: 24px; font-weight: 650; letter-spacing: -.045em; line-height: 1.15; }
   .auth-mobile-promise p { max-width: 290px; margin: 0 auto; color: #798399; font-size: 12px; line-height: 1.55; }
+  .auth-mobile-promise .auth-credit { margin-top: 7px; }
   .auth-form-heading > .eyebrow { display: none; }
   .auth-form-heading h2 { font-size: 27px; }
   .auth-legal { position: fixed; right: 0; bottom: 0; left: 0; padding: 12px; background: white; }

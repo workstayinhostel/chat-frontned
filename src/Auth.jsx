@@ -14,6 +14,7 @@ function BrandPanel() {
       <span className="eyebrow"><i /> PRIVATE BY DESIGN</span>
       <h1>Designed for one <span className="brand-heart" aria-hidden="true">♥</span>,<br />made for all.</h1>
       <p>Your conversations, calls and moments — all in one calm, private space.</p>
+      <a className="auth-credit" href="https://devsumit07.netlify.app" target="_blank" rel="noopener noreferrer">Metufy by Rebel</a>
     </div>
     <div className="chat-preview" aria-hidden="true">
       <div className="preview-top"><span className="preview-avatar">J</span><span><b>Jamie Parker</b><small><i /> Online now</small></span><span className="preview-call">⌕</span></div>
@@ -161,6 +162,7 @@ export function Auth({ onAuth }) {
       <div className="auth-mobile-promise">
         <h1>Designed for one <span className="brand-heart" aria-hidden="true">♥</span>, made for all.</h1>
         <p>Your conversations, calls and moments — all in one calm, private space.</p>
+        <a className="auth-credit" href="https://devsumit07.netlify.app" target="_blank" rel="noopener noreferrer">Metufy by Rebel</a>
       </div>
       <span className="eyebrow">WELCOME BACK</span>
       <h2>{step === 'username' ? 'Good to see you.' : 'Welcome back.'}</h2>
